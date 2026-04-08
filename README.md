@@ -297,7 +297,7 @@ MaterialInstance 导出参数覆盖表：
 
 ### 前置条件
 
-- Unreal Engine 5.4+
+- Unreal Engine 5.7
 - 运行 Commandlet 时编辑器必须关闭（`UnrealEditor-Cmd` 会锁定项目）
 - 项目必须已编译且包含该插件
 
