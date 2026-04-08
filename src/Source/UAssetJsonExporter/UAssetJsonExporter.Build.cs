@@ -21,7 +21,9 @@ public class UAssetJsonExporter : ModuleRules
                 "MovieScene",
                 "SlateCore",
                 "Niagara",
-                "NiagaraCore"
+                "NiagaraCore",
+                "AIModule",
+                "AnimGraph"
             }
         );
     }

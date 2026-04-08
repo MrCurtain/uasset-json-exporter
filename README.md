@@ -37,6 +37,8 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 | `DataTableExportCommandlet` | `DataTableExport` | DataTable 的行结构名称、所有行数据（按 RowName 索引） |
 | `NiagaraSystemExportCommandlet` | `NiagaraSystemExport` | Niagara System 的 Emitter 列表、Spawn/Update 脚本参数、Renderer 属性 |
 | `MaterialExportCommandlet` | `MaterialExport` | Material 节点图（Expression 连接链）、全局设置；MaterialInstance 参数覆盖表 |
+| `BehaviorTreeExportCommandlet` | `BehaviorTreeExport` | BT 树结构（Composite/Task/Decorator/Service）、节点参数、Blackboard Keys |
+| `AnimBlueprintExportCommandlet` | `AnimBlueprintExport` | AnimBP 的 EdGraph、StateMachine（States/Transitions/条件规则/Blend 设置） |
 
 ## 使用方法
 
@@ -321,6 +323,8 @@ Plugin: `Plugins/UAssetJsonExporter` (Editor-only)
 | DataTableExportCommandlet | `DataTableExport` | DataTable row struct and all row data |
 | NiagaraSystemExportCommandlet | `NiagaraSystemExport` | Niagara emitters, scripts, renderers |
 | MaterialExportCommandlet | `MaterialExport` | Material expressions and connections; MI parameter overrides |
+| BehaviorTreeExportCommandlet | `BehaviorTreeExport` | BT tree structure, node parameters, Blackboard keys |
+| AnimBlueprintExportCommandlet | `AnimBlueprintExport` | AnimBP EdGraph, StateMachines (states, transitions, blend settings) |
 
 ### Usage
 
@@ -343,6 +347,7 @@ Do NOT read the entire file at once. Instead:
 - Need to verify variable defaults, component setup, or event flow
 - Need to check AnimMontage notify timing, DataAsset configuration, or material setup
 - Need to inspect Niagara emitter parameters or DataTable values
+- Need to understand BehaviorTree logic flow or AnimBP state machine transitions
 ```
 
 AI 会在相关任务中自动调用 Commandlet 导出并分析资产内容。
