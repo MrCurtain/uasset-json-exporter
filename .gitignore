@@ -1,0 +1,13 @@
+# UE generated
+Binaries/
+Intermediate/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vs/
+.vscode/
+*.sln
+*.vcxproj*
