@@ -220,7 +220,7 @@ TArray<FString> UNiagaraSystemExportCommandlet::ParseAssetPaths(const FString& P
     TArray<FString> Result;
 
     FString AssetsValue;
-    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue))
+    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue, false))
     {
         AssetsValue.TrimQuotesInline();
         AssetsValue.ParseIntoArray(Result, TEXT(","), true);
