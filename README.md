@@ -26,6 +26,26 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 
 导出的 JSON 包含完整的结构信息：节点、连接、属性、默认值、时间轴标记等。AI 工具可以直接 grep 和读取 JSON 来理解蓝图逻辑，定位问题，或辅助重构。
 
+## 与 UE MCP 方案的对比
+
+社区中存在另一类方案：UE MCP（如 `kvick-games/UnrealMCP`、`chongdashu/unreal-mcp`），通过 Remote Control / Python 桥接，让 AI 在 Editor **运行时** 操作资产和场景。两类方案解决不同问题，并非互斥。
+
+| 维度 | 本插件（Commandlet） | UE MCP（Editor 运行时） |
+|---|---|---|
+| 工作模式 | 离线导出 JSON，AI 读文本 | 在线 RPC，AI 直接操作 Editor |
+| 编辑器状态 | 必须关闭（Cmd 锁定项目） | 必须开启 |
+| 资产结构读取 | 强，EdGraph/Pin/连接完整序列化 | 弱，Remote Control 拿不到 EdGraph 细节 |
+| 运行时状态 | 无 | 强，可读 PIE 中的 actor、selection、live property |
+| Token 成本 | 可控，grep + offset 按需读取 | 不可控，取决于 RPC 返回体 |
+| 适合任务 | 静态分析、蓝图审查、批量配置核对 | 场景搭建、PIE 调试、临时调参验证 |
+| 可重复性 | 高，JSON 可入版本控制做 diff | 低，依赖运行时上下文 |
+
+**选型建议**：
+
+- 需要让 AI 理解蓝图逻辑、追踪 Notify 时序、核对 DataTable / DataAsset 配置 → 用本插件
+- 需要让 AI 在 PIE 中 spawn actor、改 live 参数、读当前选中对象 → 用 UE MCP
+- 两者可以并存，commandlet 负责静态结构，MCP 负责动态状态
+
 ## 支持的 Exporter
 
 | Commandlet | `-run=` 名称 | 导出内容 |
