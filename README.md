@@ -62,7 +62,21 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 
 ## 使用方法
 
-### 命令行
+### 推荐：通过 wrapper 脚本调用
+
+```bash
+bash scripts/run_commandlet.sh \
+    "<UE_PATH>" \
+    "<PROJECT_DIR>/YourProject.uproject" \
+    BlueprintEdGraphExport \
+    "/Game/Path/BP_A,/Game/Path/BP_B"
+```
+
+`UnrealEditor-Cmd.exe` 在 commandlet 的 `Main` 返回后，常会因为 shader compile worker、DDC commit、模块卸载等原因继续停留几十秒甚至挂死。wrapper 脚本监控预期输出 JSON 的 mtime，一旦所有文件都已写出且连续稳定 N 秒（默认 10 秒），立即通过 `taskkill` 强制结束进程。
+
+可选参数：`[IDLE_SEC] [MAX_SEC]`，默认 `10` 和 `600`。退出码 `0` 表示所有预期 JSON 文件存在，`1` 表示有缺失，`2` 表示调用参数错误。
+
+### 原生调用
 
 ```bash
 "<UE_PATH>/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" \
@@ -75,6 +89,8 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 将 `-run=` 后的名称替换为你需要的 Exporter。所有 Exporter 共享相同的 `-assets=` 参数格式。
 
 如果在 Git Bash 中运行，需要加 `MSYS_NO_PATHCONV=1` 前缀，防止 `/Game/...` 被转换为 Windows 路径。
+
+使用原生调用时，若发现进程未自行退出，需要自行通过 `taskkill` 清理，否则会锁住 `.uproject` 文件影响后续操作。
 
 ### 输出
 
