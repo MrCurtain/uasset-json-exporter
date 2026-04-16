@@ -115,7 +115,7 @@ TSharedPtr<FJsonObject> UBlueprintEdGraphExportCommandlet::ExportBlueprint(UBlue
     }
     Root->SetArrayField(TEXT("Variables"), VariablesArray);
 
-    // Components (from SimpleConstructionScript)
+    // Components (from SimpleConstructionScript) with property overrides
     TArray<TSharedPtr<FJsonValue>> ComponentsArray;
     if (Blueprint->SimpleConstructionScript)
     {
@@ -126,11 +126,69 @@ TSharedPtr<FJsonObject> UBlueprintEdGraphExportCommandlet::ExportBlueprint(UBlue
                 TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
                 CompObj->SetStringField(TEXT("Name"), SCSNode->GetVariableName().ToString());
                 CompObj->SetStringField(TEXT("Class"), SCSNode->ComponentTemplate->GetClass()->GetName());
+
+                TArray<TSharedPtr<FJsonValue>> OverridesArray;
+                ExportPropertyOverrides(SCSNode->ComponentTemplate, OverridesArray);
+                if (OverridesArray.Num() > 0)
+                {
+                    CompObj->SetArrayField(TEXT("PropertyOverrides"), OverridesArray);
+                }
+
                 ComponentsArray.Add(MakeShared<FJsonValueObject>(CompObj));
             }
         }
     }
     Root->SetArrayField(TEXT("Components"), ComponentsArray);
+
+    // Inherited component property overrides (C++ default subobjects modified in Blueprint CDO)
+    if (UClass* GeneratedClass = Blueprint->GeneratedClass)
+    {
+        UObject* CDO = GeneratedClass->GetDefaultObject();
+        UClass* ParentClass = GeneratedClass->GetSuperClass();
+        UObject* ParentCDO = ParentClass ? ParentClass->GetDefaultObject() : nullptr;
+
+        if (CDO && ParentCDO)
+        {
+            TArray<TSharedPtr<FJsonValue>> InheritedOverridesArray;
+
+            for (TFieldIterator<FObjectProperty> PropIt(ParentClass); PropIt; ++PropIt)
+            {
+                FObjectProperty* ObjProp = *PropIt;
+                if (!ObjProp || ObjProp->HasAnyPropertyFlags(CPF_Transient))
+                {
+                    continue;
+                }
+
+                UObject* ChildSubObj = ObjProp->GetObjectPropertyValue(ObjProp->ContainerPtrToValuePtr<void>(CDO));
+                UObject* ParentSubObj = ObjProp->GetObjectPropertyValue(ObjProp->ContainerPtrToValuePtr<void>(ParentCDO));
+
+                if (!ChildSubObj || !ParentSubObj || ChildSubObj->GetClass() != ParentSubObj->GetClass())
+                {
+                    continue;
+                }
+                if (!ChildSubObj->IsDefaultSubobject())
+                {
+                    continue;
+                }
+
+                TArray<TSharedPtr<FJsonValue>> SubObjOverrides;
+                ExportPropertyOverridesCompare(ChildSubObj, ParentSubObj, SubObjOverrides);
+                if (SubObjOverrides.Num() > 0)
+                {
+                    TSharedPtr<FJsonObject> InheritedObj = MakeShared<FJsonObject>();
+                    InheritedObj->SetStringField(TEXT("Name"), ObjProp->GetName());
+                    InheritedObj->SetStringField(TEXT("Class"), ChildSubObj->GetClass()->GetName());
+                    InheritedObj->SetArrayField(TEXT("PropertyOverrides"), SubObjOverrides);
+                    InheritedOverridesArray.Add(MakeShared<FJsonValueObject>(InheritedObj));
+                }
+            }
+
+            if (InheritedOverridesArray.Num() > 0)
+            {
+                Root->SetArrayField(TEXT("InheritedComponentOverrides"), InheritedOverridesArray);
+            }
+        }
+    }
 
     // Graphs (EventGraphs + FunctionGraphs)
     TArray<TSharedPtr<FJsonValue>> GraphsArray;
@@ -335,6 +393,62 @@ TSharedPtr<FJsonObject> UBlueprintEdGraphExportCommandlet::ExportPin(const UEdGr
     }
 
     return PinObj;
+}
+
+void UBlueprintEdGraphExportCommandlet::ExportPropertyOverrides(UObject* Instance, TArray<TSharedPtr<FJsonValue>>& OutArray) const
+{
+    if (!Instance)
+    {
+        return;
+    }
+
+    UClass* ObjClass = Instance->GetClass();
+    UObject* ClassCDO = ObjClass->GetDefaultObject();
+    if (!ClassCDO || ClassCDO == Instance)
+    {
+        return;
+    }
+
+    ExportPropertyOverridesCompare(Instance, ClassCDO, OutArray);
+}
+
+void UBlueprintEdGraphExportCommandlet::ExportPropertyOverridesCompare(UObject* Instance, UObject* Reference, TArray<TSharedPtr<FJsonValue>>& OutArray) const
+{
+    if (!Instance || !Reference)
+    {
+        return;
+    }
+
+    for (TFieldIterator<FProperty> PropIt(Instance->GetClass()); PropIt; ++PropIt)
+    {
+        FProperty* Prop = *PropIt;
+        if (!Prop || Prop->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated))
+        {
+            continue;
+        }
+
+        // Skip object/component sub-properties (handled separately)
+        if (CastField<FObjectProperty>(Prop))
+        {
+            continue;
+        }
+
+        FString CurrentValue;
+        Prop->ExportTextItem_Direct(CurrentValue, Prop->ContainerPtrToValuePtr<void>(Instance), nullptr, Instance, PPF_None);
+
+        FString DefaultValue;
+        Prop->ExportTextItem_Direct(DefaultValue, Prop->ContainerPtrToValuePtr<void>(Reference), nullptr, Reference, PPF_None);
+
+        if (CurrentValue != DefaultValue)
+        {
+            TSharedPtr<FJsonObject> OverrideObj = MakeShared<FJsonObject>();
+            OverrideObj->SetStringField(TEXT("Name"), Prop->GetName());
+            OverrideObj->SetStringField(TEXT("Type"), Prop->GetCPPType());
+            OverrideObj->SetStringField(TEXT("Default"), DefaultValue);
+            OverrideObj->SetStringField(TEXT("Value"), CurrentValue);
+            OutArray.Add(MakeShared<FJsonValueObject>(OverrideObj));
+        }
+    }
 }
 
 TArray<FString> UBlueprintEdGraphExportCommandlet::ParseAssetPaths(const FString& Params) const
