@@ -427,10 +427,17 @@ void UBlueprintEdGraphExportCommandlet::ExportPropertyOverridesCompare(UObject* 
             continue;
         }
 
-        // Skip object/component sub-properties (handled separately)
-        if (CastField<FObjectProperty>(Prop))
+        // Skip default-subobject pointers (nested components handled separately via InheritedComponentOverrides).
+        // External asset references (StaticMesh, Material, etc.) are kept and serialized as PathName.
+        if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Prop))
         {
-            continue;
+            UObject* CurObj = ObjProp->GetObjectPropertyValue(ObjProp->ContainerPtrToValuePtr<void>(Instance));
+            UObject* RefObj = ObjProp->GetObjectPropertyValue(ObjProp->ContainerPtrToValuePtr<void>(Reference));
+            const bool bIsSubobjectRef = (CurObj && CurObj->IsDefaultSubobject()) || (RefObj && RefObj->IsDefaultSubobject());
+            if (bIsSubobjectRef)
+            {
+                continue;
+            }
         }
 
         FString CurrentValue;
