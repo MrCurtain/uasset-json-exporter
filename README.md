@@ -17,6 +17,7 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 - **Widget 布局和动画只存在于编辑器里**，UMG 的层级结构、Slot 设置、关键帧序列没有文本化的审查手段
 - **特效和材质参数分散在编辑器各处**，Niagara 的 Emitter 配置、Material 的节点连接和参数覆盖，没有统一的文本审查方式
 - **DataTable 和 DataAsset 的配置数据不可搜索**，几十行的数据表在编辑器里逐行翻看效率极低
+- **关卡（.umap）内容完全是二进制**，Actor 布局、StaticMesh 引用、碰撞配置、Streaming Level、per-instance 覆盖等没有可读的文本视图
 
 这些场景的共性：信息被锁在编辑器 UI 中，无法被代码审查、AI 分析、或自动化管道消费。
 
@@ -59,6 +60,7 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 | `MaterialExportCommandlet` | `MaterialExport` | Material 节点图（Expression 连接链）、全局设置；MaterialInstance 参数覆盖表 |
 | `BehaviorTreeExportCommandlet` | `BehaviorTreeExport` | BT 树结构（Composite/Task/Decorator/Service）、节点参数、Blackboard Keys |
 | `AnimBlueprintExportCommandlet` | `AnimBlueprintExport` | AnimBP 的 EdGraph、StateMachine（States/Transitions/条件规则/Blend 设置） |
+| `LevelExportCommandlet` | `LevelExport` | Level（.umap）中的 Actor / Component、delta-from-archetype 属性、碰撞 / StaticMesh / ISM 摘要、Streaming Level 配置 |
 
 ## 使用方法
 
@@ -276,6 +278,56 @@ MaterialInstance 导出参数覆盖表：
 </details>
 
 <details>
+<summary>Level</summary>
+
+```json
+{
+    "ExporterVersion": "1.1.0",
+    "ExportType": "Level",
+    "MapName": "L_Playground",
+    "WorldSettings": {
+        "Class": "WorldSettings",
+        "DeltaProperties": {
+            "DefaultGameMode": "/Script/Engine.BlueprintGeneratedClass'/Game/Core/BP_GameMode.BP_GameMode_C'"
+        }
+    },
+    "StreamingLevels": [
+        {
+            "PackageName": "/Game/Maps/L_PlaygroundMetrics",
+            "Class": "LevelStreamingAlwaysLoaded",
+            "ShouldBeLoaded": true,
+            "ShouldBeVisible": true
+        }
+    ],
+    "ActorCount": 181,
+    "Actors": [
+        {
+            "Name": "StaticMeshActor_2",
+            "Label": "SM_Cube",
+            "Class": "/Script/Engine.StaticMeshActor",
+            "Transform": { "Loc": "(-9740.000,-4450.000,-0.100)", "Scale": "(184.750,210.000,1.000)" },
+            "Components": [
+                {
+                    "Name": "StaticMeshComponent0",
+                    "Class": "/Script/Engine.StaticMeshComponent",
+                    "Mobility": "Static",
+                    "StaticMesh": "/Game/Core/World/LevelPrototype/Meshes/SM_Cube.SM_Cube",
+                    "CollisionProfile": "BlockAll",
+                    "CollisionEnabled": "QueryAndPhysics",
+                    "DeltaProperties": { "bUseDefaultCollision": "False" }
+                }
+            ]
+        }
+    ]
+}
+```
+
+导出策略：每个 Actor / Component 只序列化 **相对其 Archetype (`UObject::GetArchetype()`) 有差异的属性**，镜像 `.umap` 自身的持久化契约，零漏失 + 最大压缩。BP 生成的 Actor 会正确对齐到 BPGC CDO，区分"BP 默认"和"实例 override"。
+
+ISM / HISM / Foliage 组件若实例数 > 200，只导出 count + bounds + 前 5 个采样，避免单个 foliage component 爆炸文件体积。
+</details>
+
+<details>
 <summary>Niagara System</summary>
 
 ```json
@@ -361,6 +413,7 @@ Plugin: `Plugins/UAssetJsonExporter` (Editor-only)
 | MaterialExportCommandlet | `MaterialExport` | Material expressions and connections; MI parameter overrides |
 | BehaviorTreeExportCommandlet | `BehaviorTreeExport` | BT tree structure, node parameters, Blackboard keys |
 | AnimBlueprintExportCommandlet | `AnimBlueprintExport` | AnimBP EdGraph, StateMachines (states, transitions, blend settings) |
+| LevelExportCommandlet | `LevelExport` | Level (.umap) actors / components, delta-from-archetype properties, collision / static mesh / ISM summary, streaming levels |
 
 ### Usage
 
@@ -384,13 +437,14 @@ Do NOT read the entire file at once. Instead:
 - Need to check AnimMontage notify timing, DataAsset configuration, or material setup
 - Need to inspect Niagara emitter parameters or DataTable values
 - Need to understand BehaviorTree logic flow or AnimBP state machine transitions
+- Need to audit a Level: actor placements, static mesh / collision setup, streaming level config, per-instance overrides
 ```
 
 AI 会在相关任务中自动调用 Commandlet 导出并分析资产内容。
 
 ## 版本
 
-当前版本：**v1.0.0**
+当前版本：**v1.1.0**
 
 版本号定义在 `src/Source/UAssetJsonExporter/Public/UAssetJsonExporterVersion.h`，同时嵌入在每个导出 JSON 的 `ExporterVersion` 字段中。
 

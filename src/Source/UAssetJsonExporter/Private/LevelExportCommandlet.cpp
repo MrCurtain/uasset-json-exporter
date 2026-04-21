@@ -1,0 +1,436 @@
+#include "LevelExportCommandlet.h"
+#include "UAssetJsonExporterModule.h"
+#include "UAssetJsonExporterVersion.h"
+
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
+#include "Engine/Level.h"
+#include "Engine/LevelStreaming.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/World.h"
+#include "GameFramework/Actor.h"
+#include "GameFramework/WorldSettings.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+#include "UObject/Package.h"
+
+ULevelExportCommandlet::ULevelExportCommandlet()
+{
+    IsClient = false;
+    IsEditor = true;
+    IsServer = false;
+    LogToConsole = true;
+}
+
+int32 ULevelExportCommandlet::Main(const FString& Params)
+{
+    UE_LOG(LogUAssetJsonExporter, Display, TEXT("UAssetJsonExporter v%s - LevelExport"), UASSET_JSON_EXPORTER_VERSION_STRING);
+
+    TArray<FString> AssetPaths = ParseAssetPaths(Params);
+
+    if (AssetPaths.IsEmpty())
+    {
+        UE_LOG(LogUAssetJsonExporter, Error, TEXT("No maps specified. Usage: -assets=\"/Game/Maps/L_A,/Game/Maps/L_B\""));
+        return 1;
+    }
+
+    int32 ExportedCount = 0;
+
+    for (const FString& AssetPath : AssetPaths)
+    {
+        UPackage* Package = LoadPackage(nullptr, *AssetPath, LOAD_None);
+        if (!Package)
+        {
+            UE_LOG(LogUAssetJsonExporter, Warning, TEXT("Failed to load map package: %s"), *AssetPath);
+            continue;
+        }
+
+        UWorld* World = UWorld::FindWorldInPackage(Package);
+        if (!World)
+        {
+            UE_LOG(LogUAssetJsonExporter, Warning, TEXT("No UWorld in package: %s"), *AssetPath);
+            continue;
+        }
+
+        World->PersistentLevel->OnLevelLoaded();
+        World->PersistentLevel->UpdateLevelComponents(/*bRerunConstructionScripts=*/ false);
+
+        TSharedPtr<FJsonObject> JsonObject = ExportLevel(World, AssetPath);
+        if (!JsonObject.IsValid())
+        {
+            UE_LOG(LogUAssetJsonExporter, Warning, TEXT("Failed to export map: %s"), *AssetPath);
+            continue;
+        }
+
+        FString OutputPath = GetExportPath(AssetPath);
+        if (SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
+        {
+            UE_LOG(LogUAssetJsonExporter, Display, TEXT("Exported: %s -> %s"), *AssetPath, *OutputPath);
+            ExportedCount++;
+        }
+    }
+
+    UE_LOG(LogUAssetJsonExporter, Display, TEXT("Export complete. %d/%d maps exported."), ExportedCount, AssetPaths.Num());
+    return 0;
+}
+
+TSharedPtr<FJsonObject> ULevelExportCommandlet::ExportLevel(UWorld* World, const FString& MapPath) const
+{
+    TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
+
+    Root->SetStringField(TEXT("ExporterVersion"), UASSET_JSON_EXPORTER_VERSION_STRING);
+    Root->SetStringField(TEXT("ExportType"), TEXT("Level"));
+    Root->SetStringField(TEXT("MapName"), FPaths::GetBaseFilename(MapPath));
+    Root->SetStringField(TEXT("AssetPath"), MapPath);
+    Root->SetStringField(TEXT("ExportTimestamp"), FDateTime::Now().ToString());
+
+    // WorldSettings delta
+    if (AWorldSettings* WorldSettings = World->GetWorldSettings())
+    {
+        TSharedPtr<FJsonObject> WsJson = ExportWorldSettings(WorldSettings);
+        if (WsJson.IsValid() && WsJson->Values.Num() > 0)
+        {
+            Root->SetObjectField(TEXT("WorldSettings"), WsJson);
+        }
+    }
+
+    // Streaming levels
+    const TArray<ULevelStreaming*>& StreamingLevels = World->GetStreamingLevels();
+    if (StreamingLevels.Num() > 0)
+    {
+        TArray<TSharedPtr<FJsonValue>> StreamingArray;
+        for (ULevelStreaming* Streaming : StreamingLevels)
+        {
+            if (!Streaming) continue;
+            TSharedPtr<FJsonObject> StreamObj = MakeShared<FJsonObject>();
+            StreamObj->SetStringField(TEXT("PackageName"), Streaming->GetWorldAssetPackageName());
+            StreamObj->SetStringField(TEXT("Class"), Streaming->GetClass()->GetName());
+            StreamObj->SetBoolField(TEXT("ShouldBeLoaded"), Streaming->ShouldBeLoaded());
+            StreamObj->SetBoolField(TEXT("ShouldBeVisible"), Streaming->GetShouldBeVisibleFlag());
+            AddTransformField(Streaming->LevelTransform, TEXT("Transform"), StreamObj);
+            StreamingArray.Add(MakeShared<FJsonValueObject>(StreamObj));
+        }
+        Root->SetArrayField(TEXT("StreamingLevels"), StreamingArray);
+    }
+
+    // Actors
+    TArray<TSharedPtr<FJsonValue>> ActorsArray;
+    int32 SkippedCount = 0;
+    for (AActor* Actor : World->PersistentLevel->Actors)
+    {
+        if (!Actor) { SkippedCount++; continue; }
+        // Skip ephemeral runtime actors that shouldn't be in a fresh load
+        if (Actor->IsA<AWorldSettings>()) continue;
+
+        TSharedPtr<FJsonObject> ActorJson = ExportActor(Actor);
+        if (ActorJson.IsValid())
+        {
+            ActorsArray.Add(MakeShared<FJsonValueObject>(ActorJson));
+        }
+    }
+    Root->SetNumberField(TEXT("ActorCount"), ActorsArray.Num());
+    Root->SetArrayField(TEXT("Actors"), ActorsArray);
+
+    return Root;
+}
+
+TSharedPtr<FJsonObject> ULevelExportCommandlet::ExportWorldSettings(AWorldSettings* WorldSettings) const
+{
+    TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+    Json->SetStringField(TEXT("Class"), WorldSettings->GetClass()->GetName());
+
+    TSharedPtr<FJsonObject> Delta = ExportDeltaProperties(WorldSettings, WorldSettings->GetArchetype());
+    if (Delta.IsValid() && Delta->Values.Num() > 0)
+    {
+        Json->SetObjectField(TEXT("DeltaProperties"), Delta);
+    }
+    return Json;
+}
+
+TSharedPtr<FJsonObject> ULevelExportCommandlet::ExportActor(AActor* Actor) const
+{
+    TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+
+    Json->SetStringField(TEXT("Name"), Actor->GetName());
+    Json->SetStringField(TEXT("Label"), Actor->GetActorLabel());
+    Json->SetStringField(TEXT("Class"), Actor->GetClass()->GetPathName());
+
+    const FName Folder = Actor->GetFolderPath();
+    if (!Folder.IsNone())
+    {
+        Json->SetStringField(TEXT("Folder"), Folder.ToString());
+    }
+
+    if (Actor->Tags.Num() > 0)
+    {
+        TArray<TSharedPtr<FJsonValue>> TagsArray;
+        for (const FName& Tag : Actor->Tags)
+        {
+            TagsArray.Add(MakeShared<FJsonValueString>(Tag.ToString()));
+        }
+        Json->SetArrayField(TEXT("Tags"), TagsArray);
+    }
+
+    AddTransformField(Actor->GetActorTransform(), TEXT("Transform"), Json);
+
+    // Attach parent (actor-level)
+    if (AActor* AttachParent = Actor->GetAttachParentActor())
+    {
+        TSharedPtr<FJsonObject> AttachJson = MakeShared<FJsonObject>();
+        AttachJson->SetStringField(TEXT("Actor"), AttachParent->GetName());
+        AttachJson->SetStringField(TEXT("Socket"), Actor->GetAttachParentSocketName().ToString());
+        Json->SetObjectField(TEXT("AttachedTo"), AttachJson);
+    }
+
+    // Actor-level delta properties (excludes components, they get their own section)
+    TSharedPtr<FJsonObject> ActorDelta = ExportDeltaProperties(Actor, Actor->GetArchetype());
+    if (ActorDelta.IsValid() && ActorDelta->Values.Num() > 0)
+    {
+        Json->SetObjectField(TEXT("DeltaProperties"), ActorDelta);
+    }
+
+    // Components
+    TArray<UActorComponent*> Components;
+    Actor->GetComponents(Components);
+    if (Components.Num() > 0)
+    {
+        TArray<TSharedPtr<FJsonValue>> CompsArray;
+        for (UActorComponent* Comp : Components)
+        {
+            if (!Comp) continue;
+            TSharedPtr<FJsonObject> CompJson = ExportComponent(Comp);
+            if (CompJson.IsValid())
+            {
+                CompsArray.Add(MakeShared<FJsonValueObject>(CompJson));
+            }
+        }
+        Json->SetArrayField(TEXT("Components"), CompsArray);
+    }
+
+    return Json;
+}
+
+TSharedPtr<FJsonObject> ULevelExportCommandlet::ExportComponent(UActorComponent* Component) const
+{
+    TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+
+    Json->SetStringField(TEXT("Name"), Component->GetName());
+    Json->SetStringField(TEXT("Class"), Component->GetClass()->GetPathName());
+    Json->SetBoolField(TEXT("IsEditorOnly"), Component->IsEditorOnly());
+
+    // Scene hierarchy
+    if (USceneComponent* SceneComp = Cast<USceneComponent>(Component))
+    {
+        if (USceneComponent* AttachParent = SceneComp->GetAttachParent())
+        {
+            TSharedPtr<FJsonObject> AttachJson = MakeShared<FJsonObject>();
+            AttachJson->SetStringField(TEXT("Component"), AttachParent->GetName());
+            const FName SocketName = SceneComp->GetAttachSocketName();
+            if (!SocketName.IsNone())
+            {
+                AttachJson->SetStringField(TEXT("Socket"), SocketName.ToString());
+            }
+            Json->SetObjectField(TEXT("AttachParent"), AttachJson);
+        }
+
+        const FTransform& RelTransform = SceneComp->GetRelativeTransform();
+        if (!RelTransform.Equals(FTransform::Identity))
+        {
+            AddTransformField(RelTransform, TEXT("RelativeTransform"), Json);
+        }
+
+        Json->SetStringField(TEXT("Mobility"),
+            StaticEnum<EComponentMobility::Type>()->GetNameStringByValue(SceneComp->Mobility));
+    }
+
+    // Static mesh ref hoisted to top for easy grep
+    if (UStaticMeshComponent* SmComp = Cast<UStaticMeshComponent>(Component))
+    {
+        if (UStaticMesh* Mesh = SmComp->GetStaticMesh())
+        {
+            Json->SetStringField(TEXT("StaticMesh"), Mesh->GetPathName());
+        }
+    }
+
+    // Collision hoisted
+    if (UPrimitiveComponent* PrimComp = Cast<UPrimitiveComponent>(Component))
+    {
+        Json->SetStringField(TEXT("CollisionProfile"), PrimComp->GetCollisionProfileName().ToString());
+        Json->SetStringField(TEXT("CollisionEnabled"),
+            StaticEnum<ECollisionEnabled::Type>()->GetNameStringByValue(PrimComp->GetCollisionEnabled()));
+        Json->SetBoolField(TEXT("GenerateOverlapEvents"), PrimComp->GetGenerateOverlapEvents());
+    }
+
+    // ISM / HISM / Foliage: cap per-instance data
+    if (UInstancedStaticMeshComponent* IsmComp = Cast<UInstancedStaticMeshComponent>(Component))
+    {
+        AddInstancedComponentData(IsmComp, Json);
+    }
+
+    TSharedPtr<FJsonObject> Delta = ExportDeltaProperties(Component, Component->GetArchetype());
+    if (Delta.IsValid() && Delta->Values.Num() > 0)
+    {
+        Json->SetObjectField(TEXT("DeltaProperties"), Delta);
+    }
+
+    return Json;
+}
+
+void ULevelExportCommandlet::AddInstancedComponentData(UInstancedStaticMeshComponent* IsmComp, TSharedPtr<FJsonObject>& OutJson) const
+{
+    const int32 InstanceCount = IsmComp->GetInstanceCount();
+    OutJson->SetNumberField(TEXT("InstanceCount"), InstanceCount);
+
+    FBox Bounds(ForceInit);
+    const int32 Sample = FMath::Min(InstanceCount, kInstanceSampleCount);
+    TArray<TSharedPtr<FJsonValue>> Samples;
+
+    for (int32 i = 0; i < InstanceCount; ++i)
+    {
+        FTransform InstXform;
+        if (!IsmComp->GetInstanceTransform(i, InstXform, /*bWorldSpace=*/ false)) continue;
+        Bounds += InstXform.GetLocation();
+
+        if (i < Sample)
+        {
+            TSharedPtr<FJsonObject> XformJson = MakeShared<FJsonObject>();
+            AddTransformField(InstXform, TEXT("Transform"), XformJson);
+            XformJson->SetNumberField(TEXT("Index"), i);
+            Samples.Add(MakeShared<FJsonValueObject>(XformJson));
+        }
+    }
+
+    if (InstanceCount > 0)
+    {
+        TSharedPtr<FJsonObject> BoundsJson = MakeShared<FJsonObject>();
+        const FVector Min = Bounds.Min;
+        const FVector Max = Bounds.Max;
+        BoundsJson->SetStringField(TEXT("Min"), FString::Printf(TEXT("(%.2f,%.2f,%.2f)"), Min.X, Min.Y, Min.Z));
+        BoundsJson->SetStringField(TEXT("Max"), FString::Printf(TEXT("(%.2f,%.2f,%.2f)"), Max.X, Max.Y, Max.Z));
+        OutJson->SetObjectField(TEXT("InstanceBounds"), BoundsJson);
+    }
+
+    if (InstanceCount <= kInstanceDumpThreshold)
+    {
+        // Dump all
+        TArray<TSharedPtr<FJsonValue>> AllInstances;
+        for (int32 i = 0; i < InstanceCount; ++i)
+        {
+            FTransform InstXform;
+            if (!IsmComp->GetInstanceTransform(i, InstXform, false)) continue;
+            TSharedPtr<FJsonObject> XformJson = MakeShared<FJsonObject>();
+            AddTransformField(InstXform, TEXT("Transform"), XformJson);
+            XformJson->SetNumberField(TEXT("Index"), i);
+            AllInstances.Add(MakeShared<FJsonValueObject>(XformJson));
+        }
+        OutJson->SetArrayField(TEXT("Instances"), AllInstances);
+    }
+    else
+    {
+        // Just samples
+        OutJson->SetArrayField(TEXT("InstanceSamples"), Samples);
+    }
+}
+
+TSharedPtr<FJsonObject> ULevelExportCommandlet::ExportDeltaProperties(UObject* Object, UObject* Archetype) const
+{
+    TSharedPtr<FJsonObject> Props = MakeShared<FJsonObject>();
+    if (!Object || !Archetype) return Props;
+
+    UClass* Class = Object->GetClass();
+    for (TFieldIterator<FProperty> PropIt(Class); PropIt; ++PropIt)
+    {
+        FProperty* Prop = *PropIt;
+
+        if (Prop->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated | CPF_EditorOnly)) continue;
+        if (Prop->HasAnyPropertyFlags(CPF_InstancedReference)) continue; // components tracked separately
+
+        void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Object);
+        void* ArchetypePtr = (Archetype->GetClass() == Class || Archetype->IsA(Class))
+            ? Prop->ContainerPtrToValuePtr<void>(Archetype)
+            : nullptr;
+
+        if (ArchetypePtr && Prop->Identical(ValuePtr, ArchetypePtr, PPF_DeepComparison))
+        {
+            continue;
+        }
+
+        FString Value;
+        Prop->ExportTextItem_Direct(Value, ValuePtr, ArchetypePtr, Object, PPF_None);
+        if (!Value.IsEmpty())
+        {
+            Props->SetStringField(Prop->GetName(), Value);
+        }
+    }
+    return Props;
+}
+
+void ULevelExportCommandlet::AddTransformField(const FTransform& Transform, const FString& FieldName, TSharedPtr<FJsonObject>& OutJson) const
+{
+    TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+    const FVector Loc = Transform.GetLocation();
+    const FRotator Rot = Transform.Rotator();
+    const FVector Scale = Transform.GetScale3D();
+    Json->SetStringField(TEXT("Loc"), FString::Printf(TEXT("(%.3f,%.3f,%.3f)"), Loc.X, Loc.Y, Loc.Z));
+    Json->SetStringField(TEXT("Rot"), FString::Printf(TEXT("(P=%.3f,Y=%.3f,R=%.3f)"), Rot.Pitch, Rot.Yaw, Rot.Roll));
+    Json->SetStringField(TEXT("Scale"), FString::Printf(TEXT("(%.3f,%.3f,%.3f)"), Scale.X, Scale.Y, Scale.Z));
+    OutJson->SetObjectField(FieldName, Json);
+}
+
+TArray<FString> ULevelExportCommandlet::ParseAssetPaths(const FString& Params) const
+{
+    TArray<FString> Result;
+
+    FString AssetsValue;
+    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue, false))
+    {
+        AssetsValue.TrimQuotesInline();
+        AssetsValue.ParseIntoArray(Result, TEXT(","), true);
+
+        for (FString& Path : Result)
+        {
+            Path.TrimStartAndEndInline();
+        }
+    }
+
+    return Result;
+}
+
+FString ULevelExportCommandlet::GetExportPath(const FString& AssetPath) const
+{
+    FString RelativePath = AssetPath;
+    RelativePath.RemoveFromStart(TEXT("/"));
+
+    return FPaths::Combine(FPaths::ProjectDir(), TEXT("Intermediate"), TEXT("UAssetExport"), RelativePath + TEXT(".json"));
+}
+
+bool ULevelExportCommandlet::SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const
+{
+    FString OutputDir = FPaths::GetPath(FilePath);
+    if (!IFileManager::Get().DirectoryExists(*OutputDir))
+    {
+        IFileManager::Get().MakeDirectory(*OutputDir, true);
+    }
+
+    FString OutputString;
+    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
+    if (!FJsonSerializer::Serialize(JsonObject, Writer))
+    {
+        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to serialize JSON for: %s"), *FilePath);
+        return false;
+    }
+
+    if (!FFileHelper::SaveStringToFile(OutputString, *FilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+    {
+        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to write file: %s"), *FilePath);
+        return false;
+    }
+
+    return true;
+}
