@@ -110,7 +110,7 @@ bash scripts/run_commandlet.sh \
     "ExporterVersion": "1.0.0",
     "ExportType": "BlueprintEdGraph",
     "Blueprint": "BP_PlayerController",
-    "ParentClass": "BW_PlayerController",
+    "ParentClass": "PlayerController",
     "Variables": [
         { "Name": "DebugTimerHandle", "Type": "FTimerHandle" }
     ],
@@ -153,14 +153,14 @@ bash scripts/run_commandlet.sh \
     ],
     "Notifies": [
         {
-            "NotifyName": "BW_ANS_Displacement",
+            "NotifyName": "ANS_Example",
             "TriggerTime": 0.0001,
             "Duration": 0.122,
             "IsState": true,
-            "NotifyClass": "BW_AnimNotifyState_Displacement",
+            "NotifyClass": "AnimNotifyState_Example",
             "Parameters": {
-                "DisplacementSpeed": "2000.000000",
-                "Curve": "/Script/Engine.CurveFloat'.../DropOff.DropOff'"
+                "Speed": "2000.000000",
+                "Curve": "/Script/Engine.CurveFloat'.../Falloff.Falloff'"
             }
         }
     ]
@@ -211,13 +211,13 @@ bash scripts/run_commandlet.sh \
     "RowStruct": "AttributeMetaData",
     "RowCount": 5,
     "Rows": {
-        "BW_CommonAttributeSet.HealthPoint": {
+        "AttributeSet.Health": {
             "BaseValue": "100.000000",
             "MinValue": "0.000000",
             "MaxValue": "1.000000",
             "bCanStack": "False"
         },
-        "BW_PlayerAttributeSet.BloodPoint": {
+        "AttributeSet.Mana": {
             "BaseValue": "0.000000",
             "MinValue": "0.000000",
             "MaxValue": "1.000000"
