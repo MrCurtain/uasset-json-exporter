@@ -1,72 +1,72 @@
 # uasset-json-exporter
 
-**English** | [中文](README_CN.md)
+[English](README.md) | **中文**
 
 ![Claude Code](https://img.shields.io/badge/Claude_Code-black?style=flat&logo=anthropic&logoColor=white)
 ![Unreal Engine 5](https://img.shields.io/badge/Unreal_Engine-5.7-blue?logo=unrealengine&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-Export Unreal Engine binary assets as structured JSON, for AI toolchains and external analysis tools to consume.
+将 Unreal Engine 的二进制资产导出为结构化 JSON，供 AI 工具链和外部分析工具消费。
 
-## What problem it solves
+## 它解决什么问题
 
-A lot of logic and configuration in a UE project is locked inside binary `.uasset` files. When you ask an AI to help debug or refactor, you typically hit these walls:
+UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让 AI 协助调试或重构时，通常会遇到：
 
-- **"I can't open binary files"**, the AI cannot do anything with `.uasset` and kicks the problem back to you
-- **Blueprint is too large to C++-ify**, an EventGraph with hundreds of nodes has no readable text form, hand-translating node by node is slow and error-prone
-- **Dead code and misconfigurations inside blueprints**, abandoned variables, broken connections, wrong defaults left by the original creator are hard to fully audit by eye in the editor
-- **AnimMontage notify timing is hard to trace**, ANS trigger time, duration, parameters are scattered along the timeline and invisible from the code side
-- **Widget layout and animation live only in the editor**, UMG hierarchy, slot settings, keyframe sequences have no textual review surface
-- **VFX and material parameters are scattered across the editor**, Niagara emitter config, material node connections and parameter overrides have no unified textual review
-- **DataTable and DataAsset configuration is not searchable**, scrolling through a several-dozen-row data table in the editor is miserable
-- **Level (.umap) content is entirely binary**, actor layout, static mesh references, collision config, streaming levels, per-instance overrides have no readable text view
+- **"我无法打开二进制文件"**，AI 对 `.uasset` 束手无策，只能把问题丢回给你
+- **蓝图过大，难以 C++ 化**，数百个节点的 EventGraph 没有可读的文本表示，人工逐节点翻译既慢又容易遗漏
+- **蓝图中的死代码和错误配置**，创建者留下的废弃变量、断开的连接、错误的默认值，肉眼在编辑器里很难全面排查
+- **AnimMontage 的 Notify 时序难以追踪**，ANS 的触发时间、持续时长、参数散落在时间轴上，代码侧看不到全貌
+- **Widget 布局和动画只存在于编辑器里**，UMG 的层级结构、Slot 设置、关键帧序列没有文本化的审查手段
+- **特效和材质参数分散在编辑器各处**，Niagara 的 Emitter 配置、Material 的节点连接和参数覆盖，没有统一的文本审查方式
+- **DataTable 和 DataAsset 的配置数据不可搜索**，几十行的数据表在编辑器里逐行翻看效率极低
+- **关卡（.umap）内容完全是二进制**，Actor 布局、StaticMesh 引用、碰撞配置、Streaming Level、per-instance 覆盖等没有可读的文本视图
 
-The common thread: information is locked inside the editor UI and cannot be consumed by code review, AI analysis, or automation pipelines.
+这些场景的共性：信息被锁在编辑器 UI 中，无法被代码审查、AI 分析、或自动化管道消费。
 
-## How it solves it
+## 它如何解决
 
-The plugin runs outside the editor via a UE Commandlet, walks the asset's internal structure, and serializes it to JSON. It never modifies assets, only reads and exports.
+插件通过 UE Commandlet 在编辑器外运行，遍历资产的内部结构，序列化为 JSON。不修改任何资产，只读取和导出。
 
-The exported JSON contains the full structural information: nodes, connections, properties, defaults, timeline markers, etc. AI tools can grep and read the JSON directly to understand blueprint logic, locate issues, or assist refactoring.
+导出的 JSON 包含完整的结构信息：节点、连接、属性、默认值、时间轴标记等。AI 工具可以直接 grep 和读取 JSON 来理解蓝图逻辑，定位问题，或辅助重构。
 
-## Comparison with UE MCP approaches
+## 与 UE MCP 方案的对比
 
-The community has another class of solutions: UE MCP (e.g. `kvick-games/UnrealMCP`, `chongdashu/unreal-mcp`), which uses Remote Control / Python bridges to let AI manipulate assets and scenes at editor **runtime**. The two classes solve different problems and are not mutually exclusive.
+社区中存在另一类方案：UE MCP（如 `kvick-games/UnrealMCP`、`chongdashu/unreal-mcp`），通过 Remote Control / Python 桥接，让 AI 在 Editor **运行时** 操作资产和场景。两类方案解决不同问题，并非互斥。
 
-| Dimension | This plugin (Commandlet) | UE MCP (editor runtime) |
+| 维度 | 本插件（Commandlet） | UE MCP（Editor 运行时） |
 |---|---|---|
-| Working mode | Offline JSON export, AI reads text | Online RPC, AI drives the editor directly |
-| Editor state | Must be closed (commandlet locks the project) | Must be open |
-| Asset structure readout | Strong, full EdGraph / Pin / connection serialization | Weak, Remote Control cannot reach EdGraph detail |
-| Runtime state | None | Strong, can read PIE actors, selection, live properties |
-| Token cost | Controllable, grep + offset reads on demand | Uncontrollable, driven by RPC response size |
-| Suitable tasks | Static analysis, blueprint review, batch config audit | Scene building, PIE debugging, ad hoc parameter tweaks |
-| Reproducibility | High, JSON can be version-controlled and diffed | Low, depends on runtime context |
+| 工作模式 | 离线导出 JSON，AI 读文本 | 在线 RPC，AI 直接操作 Editor |
+| 编辑器状态 | 必须关闭（Cmd 锁定项目） | 必须开启 |
+| 资产结构读取 | 强，EdGraph/Pin/连接完整序列化 | 弱，Remote Control 拿不到 EdGraph 细节 |
+| 运行时状态 | 无 | 强，可读 PIE 中的 actor、selection、live property |
+| Token 成本 | 可控，grep + offset 按需读取 | 不可控，取决于 RPC 返回体 |
+| 适合任务 | 静态分析、蓝图审查、批量配置核对 | 场景搭建、PIE 调试、临时调参验证 |
+| 可重复性 | 高，JSON 可入版本控制做 diff | 低，依赖运行时上下文 |
 
-**Selection guidance**:
+**选型建议**：
 
-- Need AI to understand blueprint logic, trace notify timing, audit DataTable / DataAsset config → use this plugin
-- Need AI to spawn actors in PIE, change live parameters, read the current selection → use UE MCP
-- They can coexist: commandlet handles static structure, MCP handles dynamic state
+- 需要让 AI 理解蓝图逻辑、追踪 Notify 时序、核对 DataTable / DataAsset 配置 → 用本插件
+- 需要让 AI 在 PIE 中 spawn actor、改 live 参数、读当前选中对象 → 用 UE MCP
+- 两者可以并存，commandlet 负责静态结构，MCP 负责动态状态
 
-## Supported exporters
+## 支持的 Exporter
 
-| Commandlet | `-run=` name | What it exports |
+| Commandlet | `-run=` 名称 | 导出内容 |
 |---|---|---|
-| `BlueprintEdGraphExportCommandlet` | `BlueprintEdGraphExport` | Blueprint EdGraph nodes, pins, connections, variables, components, referenced assets |
-| `AnimMontageExportCommandlet` | `AnimMontageExport` | Montage sections, slots, ANS/AN placement and duration, notify custom parameters |
-| `WidgetLayoutExportCommandlet` | `WidgetLayoutExport` | Widget tree hierarchy, slot layout properties, subclass properties, animation keyframes, EdGraph |
-| `DataAssetExportCommandlet` | `DataAssetExport` | All custom properties of DataAsset subclasses, array elements expanded |
-| `DataTableExportCommandlet` | `DataTableExport` | DataTable row struct name, all row data (indexed by RowName) |
-| `NiagaraSystemExportCommandlet` | `NiagaraSystemExport` | Niagara system emitter list, spawn/update script parameters, renderer properties |
-| `MaterialExportCommandlet` | `MaterialExport` | Material node graph (expression connection chain), global settings; MaterialInstance parameter overrides |
-| `BehaviorTreeExportCommandlet` | `BehaviorTreeExport` | BT tree structure (Composite/Task/Decorator/Service), node parameters, Blackboard keys |
-| `AnimBlueprintExportCommandlet` | `AnimBlueprintExport` | AnimBP EdGraph, StateMachine (states/transitions/conditions/blend settings) |
-| `LevelExportCommandlet` | `LevelExport` | Level (.umap) actors / components, delta-from-archetype properties, collision / static mesh / ISM summary, streaming level configuration |
+| `BlueprintEdGraphExportCommandlet` | `BlueprintEdGraphExport` | Blueprint 的 EdGraph 节点、Pin、连接、变量、组件、引用资产 |
+| `AnimMontageExportCommandlet` | `AnimMontageExport` | Montage 的 Section、Slot、ANS/AN 位置与时长、Notify 自定义参数 |
+| `WidgetLayoutExportCommandlet` | `WidgetLayoutExport` | Widget 的树形层级、Slot 布局属性、子类属性、动画关键帧、EdGraph |
+| `DataAssetExportCommandlet` | `DataAssetExport` | DataAsset 子类的所有自定义属性，含数组元素展开 |
+| `DataTableExportCommandlet` | `DataTableExport` | DataTable 的行结构名称、所有行数据（按 RowName 索引） |
+| `NiagaraSystemExportCommandlet` | `NiagaraSystemExport` | Niagara System 的 Emitter 列表、Spawn/Update 脚本参数、Renderer 属性 |
+| `MaterialExportCommandlet` | `MaterialExport` | Material 节点图（Expression 连接链）、全局设置；MaterialInstance 参数覆盖表 |
+| `BehaviorTreeExportCommandlet` | `BehaviorTreeExport` | BT 树结构（Composite/Task/Decorator/Service）、节点参数、Blackboard Keys |
+| `AnimBlueprintExportCommandlet` | `AnimBlueprintExport` | AnimBP 的 EdGraph、StateMachine（States/Transitions/条件规则/Blend 设置） |
+| `LevelExportCommandlet` | `LevelExport` | Level（.umap）中的 Actor / Component、delta-from-archetype 属性、碰撞 / StaticMesh / ISM 摘要、Streaming Level 配置 |
 
-## Usage
+## 使用方法
 
-### Recommended: invoke via wrapper script
+### 推荐：通过 wrapper 脚本调用
 
 ```bash
 bash scripts/run_commandlet.sh \
@@ -76,11 +76,11 @@ bash scripts/run_commandlet.sh \
     "/Game/Path/BP_A,/Game/Path/BP_B"
 ```
 
-After the commandlet's `Main` returns, `UnrealEditor-Cmd.exe` often lingers for tens of seconds or hangs because of shader compile workers, DDC commits, module teardown, etc. The wrapper script watches the mtime of the expected JSON outputs; once all files are written and have been stable for N seconds (default 10), it force-kills the process via `taskkill`.
+`UnrealEditor-Cmd.exe` 在 commandlet 的 `Main` 返回后，常会因为 shader compile worker、DDC commit、模块卸载等原因继续停留几十秒甚至挂死。wrapper 脚本监控预期输出 JSON 的 mtime，一旦所有文件都已写出且连续稳定 N 秒（默认 10 秒），立即通过 `taskkill` 强制结束进程。
 
-Optional arguments: `[IDLE_SEC] [MAX_SEC]`, default `10` and `600`. Exit code `0` means all expected JSON files exist, `1` means some are missing, `2` means argument error.
+可选参数：`[IDLE_SEC] [MAX_SEC]`，默认 `10` 和 `600`。退出码 `0` 表示所有预期 JSON 文件存在，`1` 表示有缺失，`2` 表示调用参数错误。
 
-### Native invocation
+### 原生调用
 
 ```bash
 "<UE_PATH>/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" \
@@ -90,19 +90,19 @@ Optional arguments: `[IDLE_SEC] [MAX_SEC]`, default `10` and `600`. Exit code `0
     -nullrhi -nosplash -nosound
 ```
 
-Replace the name after `-run=` with the exporter you need. All exporters share the same `-assets=` argument format.
+将 `-run=` 后的名称替换为你需要的 Exporter。所有 Exporter 共享相同的 `-assets=` 参数格式。
 
-If running under Git Bash, prefix with `MSYS_NO_PATHCONV=1` to prevent `/Game/...` from being rewritten as a Windows path.
+如果在 Git Bash 中运行，需要加 `MSYS_NO_PATHCONV=1` 前缀，防止 `/Game/...` 被转换为 Windows 路径。
 
-With native invocation, if the process does not exit on its own, you need to `taskkill` it manually, otherwise the lingering process will keep `.uproject` locked and block subsequent operations.
+使用原生调用时，若发现进程未自行退出，需要自行通过 `taskkill` 清理，否则会锁住 `.uproject` 文件影响后续操作。
 
-### Output
+### 输出
 
-Files are written to `<ProjectDir>/Intermediate/UAssetExport/<AssetPath>.json`, which stays out of version control.
+文件输出到 `<ProjectDir>/Intermediate/UAssetExport/<AssetPath>.json`，不会进入版本控制。
 
-Every JSON file contains `ExporterVersion` and `ExportType` fields identifying the exporter version and asset type.
+每个 JSON 文件都包含 `ExporterVersion` 和 `ExportType` 字段，标识导出器版本和资产类型。
 
-### Output examples
+### 输出示例
 
 <details>
 <summary>Blueprint EdGraph</summary>
@@ -260,7 +260,7 @@ Every JSON file contains `ExporterVersion` and `ExportType` fields identifying t
 }
 ```
 
-MaterialInstance exports the parameter override table:
+MaterialInstance 导出参数覆盖表：
 
 ```json
 {
@@ -324,9 +324,9 @@ MaterialInstance exports the parameter override table:
 }
 ```
 
-Export strategy: every actor / component only serializes **properties that differ from its archetype (`UObject::GetArchetype()`)**, mirroring the `.umap` own persistence contract for zero loss and maximum compression. Actors spawned from blueprints correctly align to the BPGC CDO, so "BP default" and "instance override" stay distinguishable.
+导出策略：每个 Actor / Component 只序列化 **相对其 Archetype (`UObject::GetArchetype()`) 有差异的属性**，镜像 `.umap` 自身的持久化契约，零漏失 + 最大压缩。BP 生成的 Actor 会正确对齐到 BPGC CDO，区分"BP 默认"和"实例 override"。
 
-For ISM / HISM / Foliage components with instance count > 200, only count + bounds + the first 5 samples are exported, to prevent a single foliage component from blowing up the file size.
+ISM / HISM / Foliage 组件若实例数 > 200，只导出 count + bounds + 前 5 个采样，避免单个 foliage component 爆炸文件体积。
 </details>
 
 <details>
@@ -360,19 +360,19 @@ For ISM / HISM / Foliage components with instance count > 200, only count + boun
 ```
 </details>
 
-### Reading strategy
+### 读取策略
 
-The exported JSON can be very large (e.g. a complex PlayerCharacter blueprint can exceed 8000 lines). Recommended:
+导出的 JSON 可能非常大（例如一个复杂的 PlayerCharacter 蓝图可以超过 8000 行）。建议：
 
-1. Use grep to locate the node names, function names, or pin connections you care about
-2. Read the relevant range by line numbers, do not load the entire file at once
+1. 用 grep 定位你关心的节点名称、函数名或 Pin 连接
+2. 按行号范围读取相关段落，不要一次性加载整个文件
 
-## Integrating into your project
+## 集成到你的项目
 
-### Option 1: as a project plugin
+### 方式 1：作为项目插件
 
-1. Copy the contents of `src/` into your project's `Plugins/UAssetJsonExporter/`
-2. Add to the `Plugins` array in `.uproject`:
+1. 将 `src/` 目录下的内容复制到你项目的 `Plugins/UAssetJsonExporter/`
+2. 在 `.uproject` 的 `Plugins` 数组中添加：
 
 ```json
 {
@@ -381,21 +381,21 @@ The exported JSON can be very large (e.g. a complex PlayerCharacter blueprint ca
 }
 ```
 
-3. Regenerate project files and build
+3. 重新生成项目文件并编译
 
-### Option 2: as an engine plugin
+### 方式 2：作为引擎插件
 
-Copy the contents of `src/` into `<UE_PATH>/Engine/Plugins/Editor/UAssetJsonExporter/`, shared by all projects.
+将 `src/` 目录下的内容复制到 `<UE_PATH>/Engine/Plugins/Editor/UAssetJsonExporter/`，所有项目共享。
 
-### Prerequisites
+### 前置条件
 
 - Unreal Engine 5.7
-- Editor must be closed while running the commandlet (`UnrealEditor-Cmd` locks the project)
-- The project must be compiled with the plugin included
+- 运行 Commandlet 时编辑器必须关闭（`UnrealEditor-Cmd` 会锁定项目）
+- 项目必须已编译且包含该插件
 
-## Using with Claude Code
+## 配合 Claude Code 使用
 
-If you use [Claude Code](https://claude.ai/code) as your AI collaborator, add the following block to your project's `.claude/CLAUDE.md` so the AI knows this tool exists and how to use it:
+如果你使用 [Claude Code](https://claude.ai/code) 作为 AI 协作工具，可以在项目的 `.claude/CLAUDE.md` 中添加以下段落，让 AI 知道这个工具的存在和用法：
 
 ```markdown
 ## Tooling: UAsset Json Exporter
@@ -442,13 +442,13 @@ Do NOT read the entire file at once. Instead:
 - Need to audit a Level: actor placements, static mesh / collision setup, streaming level config, per-instance overrides
 ```
 
-The AI will then invoke the commandlet automatically to export and analyze assets during relevant tasks.
+AI 会在相关任务中自动调用 Commandlet 导出并分析资产内容。
 
-## Version
+## 版本
 
-Current version: **v1.1.0**
+当前版本：**v1.1.0**
 
-The version is defined in `src/Source/UAssetJsonExporter/Public/UAssetJsonExporterVersion.h`, and is embedded in every exported JSON's `ExporterVersion` field.
+版本号定义在 `src/Source/UAssetJsonExporter/Public/UAssetJsonExporterVersion.h`，同时嵌入在每个导出 JSON 的 `ExporterVersion` 字段中。
 
 ## License
 
