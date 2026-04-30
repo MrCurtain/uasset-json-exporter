@@ -14,7 +14,10 @@ class UEdGraphPin;
  * for external tooling consumption.
  *
  * Usage:
- *   UnrealEditor-Cmd.exe Project.uproject -run=BlueprintEdGraphExport -assets="/Game/Path/BP_A,/Game/Path/BP_B"
+ *   UnrealEditor-Cmd.exe Project.uproject -run=BlueprintEdGraphExport -assets="/Game/Path/BP_A,/Game/Path/BP_B" [flags]
+ *
+ * Verbosity flags (default = lean, opt-in to expand):
+ *   -graphs            include full graph node + pin details (otherwise only graph counts)
  *
  * Output:
  *   <ProjectDir>/Intermediate/UAssetExport/<AssetPath>.json
@@ -32,8 +35,13 @@ public:
 
 private:
 
-    TSharedPtr<FJsonObject> ExportBlueprint(class UBlueprint* Blueprint) const;
-    TSharedPtr<FJsonObject> ExportGraph(const UEdGraph* Graph) const;
+    struct FExportOptions
+    {
+        bool bIncludeGraphs = false;
+    };
+
+    TSharedPtr<FJsonObject> ExportBlueprint(class UBlueprint* Blueprint, const FExportOptions& Options) const;
+    TSharedPtr<FJsonObject> ExportGraph(const UEdGraph* Graph, const FExportOptions& Options) const;
     TSharedPtr<FJsonObject> ExportNode(const UEdGraphNode* Node) const;
     TSharedPtr<FJsonObject> ExportPin(const UEdGraphPin* Pin) const;
 
@@ -44,6 +52,7 @@ private:
     void ExportPropertyOverridesCompare(UObject* Instance, UObject* Reference, TArray<TSharedPtr<FJsonValue>>& OutArray) const;
 
     TArray<FString> ParseAssetPaths(const FString& Params) const;
+    FExportOptions ParseExportOptions(const FString& Params) const;
     FString GetExportPath(const FString& AssetPath) const;
     bool SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const;
 };
