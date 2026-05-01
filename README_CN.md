@@ -446,7 +446,7 @@ AI 会在相关任务中自动调用 Commandlet 导出并分析资产内容。
 
 ## 版本
 
-当前版本：**v1.1.0**
+当前版本：**v1.4.0**
 
 版本号定义在 `src/Source/UAssetJsonExporter/Public/UAssetJsonExporterVersion.h`，同时嵌入在每个导出 JSON 的 `ExporterVersion` 字段中。
 

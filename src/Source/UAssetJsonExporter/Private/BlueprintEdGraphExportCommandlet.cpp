@@ -222,6 +222,13 @@ TSharedPtr<FJsonObject> UBlueprintEdGraphExportCommandlet::ExportBlueprint(UBlue
                 CompObj->SetArrayField(TEXT("PropertyOverrides"), OverridesArray);
             }
 
+            TArray<TSharedPtr<FJsonValue>> ResolvedArray;
+            ExportResolvedProperties(SCSNode->ComponentTemplate, ResolvedArray);
+            if (ResolvedArray.Num() > 0)
+            {
+                CompObj->SetArrayField(TEXT("ResolvedProperties"), ResolvedArray);
+            }
+
             ComponentsArray.Add(MakeShared<FJsonValueObject>(CompObj));
         }
     }
@@ -280,6 +287,34 @@ TSharedPtr<FJsonObject> UBlueprintEdGraphExportCommandlet::ExportBlueprint(UBlue
             if (InheritedOverridesArray.Num() > 0)
             {
                 Root->SetArrayField(TEXT("InheritedComponentOverrides"), InheritedOverridesArray);
+            }
+        }
+    }
+
+    // Actor-level CDO: full resolved properties (Tags, bHidden, replication flags, etc.)
+    // and the deltas vs the parent class CDO. Lets external tools see what the BP author
+    // tweaked at the actor level (independent of components).
+    if (UClass* GeneratedClass = Blueprint->GeneratedClass)
+    {
+        if (UObject* CDO = GeneratedClass->GetDefaultObject())
+        {
+            TArray<TSharedPtr<FJsonValue>> ActorResolvedArray;
+            ExportResolvedProperties(CDO, ActorResolvedArray);
+            if (ActorResolvedArray.Num() > 0)
+            {
+                Root->SetArrayField(TEXT("ActorCDOProperties"), ActorResolvedArray);
+            }
+
+            UClass* ParentClass = GeneratedClass->GetSuperClass();
+            UObject* ParentCDO = ParentClass ? ParentClass->GetDefaultObject() : nullptr;
+            if (ParentCDO)
+            {
+                TArray<TSharedPtr<FJsonValue>> ActorOverridesArray;
+                ExportPropertyOverridesCompare(CDO, ParentCDO, ActorOverridesArray);
+                if (ActorOverridesArray.Num() > 0)
+                {
+                    Root->SetArrayField(TEXT("ActorCDOOverrides"), ActorOverridesArray);
+                }
             }
         }
     }
@@ -627,6 +662,15 @@ void UBlueprintEdGraphExportCommandlet::ExportPropertyOverridesCompare(UObject* 
             continue;
         }
 
+        // When Reference is a base-class CDO (e.g. AActor CDO vs a BP-class CDO), the
+        // iterator surfaces properties owned by Instance subclasses. Reading those off
+        // Reference triggers a hard assertion in ContainerPtrToValuePtr. Guard here.
+        UClass* PropOwner = Prop->GetOwner<UClass>();
+        if (PropOwner && !Reference->GetClass()->IsChildOf(PropOwner))
+        {
+            continue;
+        }
+
         // Skip default-subobject pointers (nested components handled separately via InheritedComponentOverrides).
         // External asset references (StaticMesh, Material, etc.) are kept and serialized as PathName.
         if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Prop))
@@ -655,6 +699,42 @@ void UBlueprintEdGraphExportCommandlet::ExportPropertyOverridesCompare(UObject* 
             OverrideObj->SetStringField(TEXT("Value"), CurrentValue);
             OutArray.Add(MakeShared<FJsonValueObject>(OverrideObj));
         }
+    }
+}
+
+void UBlueprintEdGraphExportCommandlet::ExportResolvedProperties(UObject* Instance, TArray<TSharedPtr<FJsonValue>>& OutArray) const
+{
+    if (!Instance)
+    {
+        return;
+    }
+
+    for (TFieldIterator<FProperty> PropIt(Instance->GetClass()); PropIt; ++PropIt)
+    {
+        FProperty* Prop = *PropIt;
+        if (!Prop || Prop->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated))
+        {
+            continue;
+        }
+
+        // Skip default-subobject pointers (component nesting noise; external asset refs are kept).
+        if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Prop))
+        {
+            UObject* CurObj = ObjProp->GetObjectPropertyValue(ObjProp->ContainerPtrToValuePtr<void>(Instance));
+            if (CurObj && CurObj->IsDefaultSubobject())
+            {
+                continue;
+            }
+        }
+
+        FString CurrentValue;
+        Prop->ExportTextItem_Direct(CurrentValue, Prop->ContainerPtrToValuePtr<void>(Instance), nullptr, Instance, PPF_None);
+
+        TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+        Entry->SetStringField(TEXT("Name"), Prop->GetName());
+        Entry->SetStringField(TEXT("Type"), Prop->GetCPPType());
+        Entry->SetStringField(TEXT("Value"), CurrentValue);
+        OutArray.Add(MakeShared<FJsonValueObject>(Entry));
     }
 }
 

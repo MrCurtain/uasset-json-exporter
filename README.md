@@ -446,7 +446,7 @@ The AI will then invoke the commandlet automatically to export and analyze asset
 
 ## Version
 
-Current version: **v1.1.0**
+Current version: **v1.4.0**
 
 The version is defined in `src/Source/UAssetJsonExporter/Public/UAssetJsonExporterVersion.h`, and is embedded in every exported JSON's `ExporterVersion` field.
 

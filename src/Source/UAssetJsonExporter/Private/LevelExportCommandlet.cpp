@@ -14,8 +14,11 @@
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/WorldSettings.h"
+#include "Misc/Crc.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Rendering/ColorVertexBuffer.h"
+#include "StaticMeshComponentLODInfo.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/Package.h"
@@ -256,6 +259,37 @@ TSharedPtr<FJsonObject> ULevelExportCommandlet::ExportComponent(UActorComponent*
         {
             Json->SetStringField(TEXT("StaticMesh"), Mesh->GetPathName());
         }
+
+        // Vertex paint per-LOD: OverrideVertexColors is NOT a UProperty (raw FColorVertexBuffer*),
+        // so DeltaProperties cannot see it. Surface it explicitly with a CRC so audit can compare.
+        TArray<TSharedPtr<FJsonValue>> PaintLODs;
+        for (int32 LODIdx = 0; LODIdx < SmComp->LODData.Num(); ++LODIdx)
+        {
+            const FStaticMeshComponentLODInfo& LOD = SmComp->LODData[LODIdx];
+            FColorVertexBuffer* CVB = LOD.OverrideVertexColors;
+            if (!CVB || CVB->GetNumVertices() == 0)
+            {
+                continue;
+            }
+            const int32 NumVerts = CVB->GetNumVertices();
+            TArray<FColor> Colors;
+            Colors.SetNumUninitialized(NumVerts);
+            for (int32 v = 0; v < NumVerts; ++v)
+            {
+                Colors[v] = CVB->VertexColor(v);
+            }
+            const uint32 CRC = FCrc::MemCrc32(Colors.GetData(), NumVerts * sizeof(FColor));
+
+            TSharedPtr<FJsonObject> LODJson = MakeShared<FJsonObject>();
+            LODJson->SetNumberField(TEXT("LOD"), LODIdx);
+            LODJson->SetNumberField(TEXT("NumVertices"), NumVerts);
+            LODJson->SetStringField(TEXT("ColorCRC32"), FString::Printf(TEXT("%08x"), CRC));
+            PaintLODs.Add(MakeShared<FJsonValueObject>(LODJson));
+        }
+        if (PaintLODs.Num() > 0)
+        {
+            Json->SetArrayField(TEXT("VertexPaintLODs"), PaintLODs);
+        }
     }
 
     // Collision hoisted
@@ -265,6 +299,20 @@ TSharedPtr<FJsonObject> ULevelExportCommandlet::ExportComponent(UActorComponent*
         Json->SetStringField(TEXT("CollisionEnabled"),
             StaticEnum<ECollisionEnabled::Type>()->GetNameStringByValue(PrimComp->GetCollisionEnabled()));
         Json->SetBoolField(TEXT("GenerateOverlapEvents"), PrimComp->GetGenerateOverlapEvents());
+
+        // CustomPrimitiveData: UPROPERTY but accessed via getter to honour any per-instance default
+        // initialization. Surface as a float array; downstream audit compares element-by-element.
+        const TArray<float>& CPD = PrimComp->GetCustomPrimitiveData().Data;
+        if (CPD.Num() > 0)
+        {
+            TArray<TSharedPtr<FJsonValue>> CPDArr;
+            CPDArr.Reserve(CPD.Num());
+            for (float F : CPD)
+            {
+                CPDArr.Add(MakeShared<FJsonValueNumber>(F));
+            }
+            Json->SetArrayField(TEXT("CustomPrimitiveData"), CPDArr);
+        }
     }
 
     // ISM / HISM / Foliage: cap per-instance data
