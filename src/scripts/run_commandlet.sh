@@ -8,15 +8,17 @@
 # mtimes remain unchanged for IDLE_SEC seconds, force-kills the process.
 #
 # Usage:
-#   run_commandlet.sh <UE_PATH> <UPROJECT> <RunName> <AssetList> [IDLE_SEC] [MAX_SEC]
+#   run_commandlet.sh <UE_PATH> <UPROJECT> <RunName> <AssetList> [IDLE_SEC] [MAX_SEC] [EXTRA_ARGS]
 #
 # Args:
-#   UE_PATH    Engine install root, e.g. "C:/Program Files/Epic Games/UE_5.7"
-#   UPROJECT   Absolute path to the .uproject file
-#   RunName    Commandlet name, e.g. "BlueprintEdGraphExport"
-#   AssetList  Comma-separated asset paths, e.g. "/Game/Foo/BP_A,/Game/Bar/BP_B"
-#   IDLE_SEC   Seconds of mtime stability before kill. Default 10.
-#   MAX_SEC    Absolute upper bound on total wait. Default 600.
+#   UE_PATH     Engine install root, e.g. "C:/Program Files/Epic Games/UE_5.7"
+#   UPROJECT    Absolute path to the .uproject file
+#   RunName     Commandlet name, e.g. "BlueprintEdGraphExport"
+#   AssetList   Comma-separated asset paths, e.g. "/Game/Foo/BP_A,/Game/Bar/BP_B"
+#   IDLE_SEC    Seconds of mtime stability before kill. Default 10.
+#   MAX_SEC     Absolute upper bound on total wait. Default 600.
+#   EXTRA_ARGS  Whitespace-separated extra flags forwarded verbatim to UnrealEditor-Cmd
+#               (e.g. "-graphs" to include full BP node + pin details). Default empty.
 #
 # Exit codes:
 #   0 - all expected JSON files exist at end
@@ -36,6 +38,7 @@ RUN="$3"
 ASSETS="$4"
 IDLE_SEC="${5:-10}"
 MAX_SEC="${6:-600}"
+EXTRA_ARGS="${7:-}"
 
 UE_CMD="$UE_PATH/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"
 PROJECT_DIR="$(dirname "$UPROJECT")"
@@ -61,7 +64,7 @@ for A in "${ASSET_ARR[@]}"; do
 done
 
 MSYS_NO_PATHCONV=1 "$UE_CMD" "$UPROJECT" \
-    -run="$RUN" -assets="$ASSETS" \
+    -run="$RUN" -assets="$ASSETS" $EXTRA_ARGS \
     -nullrhi -nosplash -nosound -unattended \
     >/dev/null 2>&1 &
 PID=$!

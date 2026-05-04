@@ -13,6 +13,8 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_DynamicCast.h"
 #include "K2Node_Event.h"
+#include "K2Node_MacroInstance.h"
+#include "K2Node_Variable.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonSerializer.h"
@@ -520,10 +522,37 @@ TSharedPtr<FJsonObject> UBlueprintEdGraphExportCommandlet::ExportNode(const UEdG
     NodeObj->SetStringField(TEXT("NodeId"), Node->NodeGuid.ToString());
     NodeObj->SetStringField(TEXT("Class"), Node->GetClass()->GetName());
     NodeObj->SetStringField(TEXT("Title"), Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+    NodeObj->SetNumberField(TEXT("PosX"), Node->NodePosX);
+    NodeObj->SetNumberField(TEXT("PosY"), Node->NodePosY);
 
     if (!Node->NodeComment.IsEmpty())
     {
         NodeObj->SetStringField(TEXT("Comment"), Node->NodeComment);
+    }
+
+    if (const UK2Node_Variable* VarNode = Cast<UK2Node_Variable>(Node))
+    {
+        FName VarName = VarNode->VariableReference.GetMemberName();
+        if (!VarName.IsNone())
+        {
+            NodeObj->SetStringField(TEXT("VariableName"), VarName.ToString());
+        }
+        if (UClass* VarOwner = VarNode->VariableReference.GetMemberParentClass())
+        {
+            NodeObj->SetStringField(TEXT("VariableOwner"), VarOwner->GetName());
+        }
+    }
+
+    if (const UK2Node_MacroInstance* MacroNode = Cast<UK2Node_MacroInstance>(Node))
+    {
+        if (UEdGraph* MacroGraph = MacroNode->GetMacroGraph())
+        {
+            NodeObj->SetStringField(TEXT("MacroName"), MacroGraph->GetName());
+            if (UPackage* MacroPkg = MacroGraph->GetOutermost())
+            {
+                NodeObj->SetStringField(TEXT("MacroPackage"), MacroPkg->GetName());
+            }
+        }
     }
 
     if (const UK2Node_CallFunction* CallNode = Cast<UK2Node_CallFunction>(Node))
