@@ -44,7 +44,4 @@ private:
     TSharedPtr<FJsonObject> ExportNode(const UEdGraphNode* Node) const;
     TSharedPtr<FJsonObject> ExportPin(const UEdGraphPin* Pin) const;
 
-    TArray<FString> ParseAssetPaths(const FString& Params) const;
-    FString GetExportPath(const FString& AssetPath) const;
-    bool SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const;
 };

@@ -1,5 +1,6 @@
 #include "MaterialExportCommandlet.h"
 #include "UAssetJsonExporterModule.h"
+#include "UAssetJsonExporterUtil.h"
 #include "UAssetJsonExporterVersion.h"
 
 #include "Dom/JsonObject.h"
@@ -27,9 +28,14 @@ UMaterialExportCommandlet::UMaterialExportCommandlet()
 
 int32 UMaterialExportCommandlet::Main(const FString& Params)
 {
+    if (UAssetJsonExporter::AbortIfLiveEditor())
+    {
+        return 2;
+    }
+
     UE_LOG(LogUAssetJsonExporter, Display, TEXT("UAssetJsonExporter v%s - MaterialExport"), UASSET_JSON_EXPORTER_VERSION_STRING);
 
-    TArray<FString> AssetPaths = ParseAssetPaths(Params);
+    TArray<FString> AssetPaths = UAssetJsonExporter::ParseAssetPaths(Params);
 
     if (AssetPaths.IsEmpty())
     {
@@ -48,8 +54,8 @@ int32 UMaterialExportCommandlet::Main(const FString& Params)
             TSharedPtr<FJsonObject> JsonObject = ExportMaterialInstance(MaterialInstance);
             if (JsonObject.IsValid())
             {
-                FString OutputPath = GetExportPath(AssetPath);
-                if (SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
+                FString OutputPath = UAssetJsonExporter::GetExportPath(AssetPath);
+                if (UAssetJsonExporter::SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
                 {
                     UE_LOG(LogUAssetJsonExporter, Display, TEXT("Exported: %s -> %s"), *AssetPath, *OutputPath);
                     ExportedCount++;
@@ -64,8 +70,8 @@ int32 UMaterialExportCommandlet::Main(const FString& Params)
             TSharedPtr<FJsonObject> JsonObject = ExportMaterial(Material);
             if (JsonObject.IsValid())
             {
-                FString OutputPath = GetExportPath(AssetPath);
-                if (SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
+                FString OutputPath = UAssetJsonExporter::GetExportPath(AssetPath);
+                if (UAssetJsonExporter::SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
                 {
                     UE_LOG(LogUAssetJsonExporter, Display, TEXT("Exported: %s -> %s"), *AssetPath, *OutputPath);
                     ExportedCount++;
@@ -92,7 +98,8 @@ TSharedPtr<FJsonObject> UMaterialExportCommandlet::ExportMaterial(UMaterial* Mat
     Root->SetStringField(TEXT("ExportTimestamp"), FDateTime::Now().ToString());
 
     // Global settings
-    Root->SetStringField(TEXT("ShadingModel"), StaticEnum<EMaterialShadingModel>()->GetNameStringByValue(static_cast<int64>(Material->GetShadingModels().GetFirstShadingModel())));
+    const EMaterialShadingModel ShadingModel = Material->GetShadingModels().GetFirstShadingModel();
+    Root->SetStringField(TEXT("ShadingModel"), StaticEnum<EMaterialShadingModel>()->GetNameStringByValue(static_cast<int64>(ShadingModel)));
     Root->SetStringField(TEXT("BlendMode"), StaticEnum<EBlendMode>()->GetNameStringByValue(static_cast<int64>(Material->BlendMode)));
     Root->SetBoolField(TEXT("TwoSided"), Material->IsTwoSided());
     Root->SetStringField(TEXT("MaterialDomain"), StaticEnum<EMaterialDomain>()->GetNameStringByValue(static_cast<int64>(Material->MaterialDomain)));
@@ -127,6 +134,8 @@ TSharedPtr<FJsonObject> UMaterialExportCommandlet::ExportMaterial(UMaterial* Mat
         }
     };
 
+    // UE 5 moved per-shading-model material inputs onto an editor-only data subobject;
+    // GetEditorOnlyData() is the only access path, the direct UMaterial members are gone.
     ExportMaterialInput(Material->GetEditorOnlyData()->BaseColor, TEXT("BaseColor"));
     ExportMaterialInput(Material->GetEditorOnlyData()->Metallic, TEXT("Metallic"));
     ExportMaterialInput(Material->GetEditorOnlyData()->Specular, TEXT("Specular"));
@@ -275,54 +284,3 @@ TSharedPtr<FJsonObject> UMaterialExportCommandlet::ExportExpression(UMaterialExp
     return Obj;
 }
 
-TArray<FString> UMaterialExportCommandlet::ParseAssetPaths(const FString& Params) const
-{
-    TArray<FString> Result;
-
-    FString AssetsValue;
-    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue, false))
-    {
-        AssetsValue.TrimQuotesInline();
-        AssetsValue.ParseIntoArray(Result, TEXT(","), true);
-
-        for (FString& Path : Result)
-        {
-            Path.TrimStartAndEndInline();
-        }
-    }
-
-    return Result;
-}
-
-FString UMaterialExportCommandlet::GetExportPath(const FString& AssetPath) const
-{
-    FString RelativePath = AssetPath;
-    RelativePath.RemoveFromStart(TEXT("/"));
-
-    return FPaths::Combine(FPaths::ProjectDir(), TEXT("Intermediate"), TEXT("UAssetExport"), RelativePath + TEXT(".json"));
-}
-
-bool UMaterialExportCommandlet::SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const
-{
-    FString OutputDir = FPaths::GetPath(FilePath);
-    if (!IFileManager::Get().DirectoryExists(*OutputDir))
-    {
-        IFileManager::Get().MakeDirectory(*OutputDir, true);
-    }
-
-    FString OutputString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
-    if (!FJsonSerializer::Serialize(JsonObject, Writer))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to serialize JSON for: %s"), *FilePath);
-        return false;
-    }
-
-    if (!FFileHelper::SaveStringToFile(OutputString, *FilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to write file: %s"), *FilePath);
-        return false;
-    }
-
-    return true;
-}

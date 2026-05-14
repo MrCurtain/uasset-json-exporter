@@ -50,7 +50,4 @@ private:
     void AddInstancedComponentData(class UInstancedStaticMeshComponent* IsmComp, TSharedPtr<FJsonObject>& OutJson) const;
     void AddTransformField(const FTransform& Transform, const FString& FieldName, TSharedPtr<FJsonObject>& OutJson) const;
 
-    TArray<FString> ParseAssetPaths(const FString& Params) const;
-    FString GetExportPath(const FString& AssetPath) const;
-    bool SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const;
 };

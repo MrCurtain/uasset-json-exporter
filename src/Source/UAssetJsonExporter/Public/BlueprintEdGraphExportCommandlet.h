@@ -67,8 +67,5 @@ private:
     // without needing to derive resolved values from delta entries.
     void ExportResolvedProperties(UObject* Instance, TArray<TSharedPtr<FJsonValue>>& OutArray) const;
 
-    TArray<FString> ParseAssetPaths(const FString& Params) const;
     FExportOptions ParseExportOptions(const FString& Params) const;
-    FString GetExportPath(const FString& AssetPath) const;
-    bool SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const;
 };

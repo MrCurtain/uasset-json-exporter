@@ -1,5 +1,6 @@
 #include "DataAssetExportCommandlet.h"
 #include "UAssetJsonExporterModule.h"
+#include "UAssetJsonExporterUtil.h"
 #include "UAssetJsonExporterVersion.h"
 
 #include "Dom/JsonObject.h"
@@ -20,9 +21,14 @@ UDataAssetExportCommandlet::UDataAssetExportCommandlet()
 
 int32 UDataAssetExportCommandlet::Main(const FString& Params)
 {
+    if (UAssetJsonExporter::AbortIfLiveEditor())
+    {
+        return 2;
+    }
+
     UE_LOG(LogUAssetJsonExporter, Display, TEXT("UAssetJsonExporter v%s - DataAssetExport"), UASSET_JSON_EXPORTER_VERSION_STRING);
 
-    TArray<FString> AssetPaths = ParseAssetPaths(Params);
+    TArray<FString> AssetPaths = UAssetJsonExporter::ParseAssetPaths(Params);
 
     if (AssetPaths.IsEmpty())
     {
@@ -48,8 +54,8 @@ int32 UDataAssetExportCommandlet::Main(const FString& Params)
             continue;
         }
 
-        FString OutputPath = GetExportPath(AssetPath);
-        if (SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
+        FString OutputPath = UAssetJsonExporter::GetExportPath(AssetPath);
+        if (UAssetJsonExporter::SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
         {
             UE_LOG(LogUAssetJsonExporter, Display, TEXT("Exported: %s -> %s"), *AssetPath, *OutputPath);
             ExportedCount++;
@@ -82,7 +88,7 @@ TSharedPtr<FJsonObject> UDataAssetExportCommandlet::ExportDataAsset(UDataAsset* 
     Root->SetArrayField(TEXT("ClassHierarchy"), HierarchyArray);
 
     // All properties from the DataAsset subclass down to (but not including) UDataAsset base
-    TSharedPtr<FJsonObject> Props = ExportProperties(DataAsset, UDataAsset::StaticClass());
+    TSharedPtr<FJsonObject> Props = ExportSubclassProperties(DataAsset, UDataAsset::StaticClass());
     if (Props.IsValid() && Props->Values.Num() > 0)
     {
         Root->SetObjectField(TEXT("Properties"), Props);
@@ -91,7 +97,7 @@ TSharedPtr<FJsonObject> UDataAssetExportCommandlet::ExportDataAsset(UDataAsset* 
     return Root;
 }
 
-TSharedPtr<FJsonObject> UDataAssetExportCommandlet::ExportProperties(UObject* Object, UClass* StopAtClass) const
+TSharedPtr<FJsonObject> UDataAssetExportCommandlet::ExportSubclassProperties(UObject* Object, UClass* StopAtClass) const
 {
     TSharedPtr<FJsonObject> Props = MakeShared<FJsonObject>();
 
@@ -124,7 +130,11 @@ TSharedPtr<FJsonObject> UDataAssetExportCommandlet::ExportProperties(UObject* Ob
                         InnerProp->ExportTextItem_Direct(ElemValue, ArrayHelper.GetRawPtr(i), nullptr, Object, PPF_None);
                         ElementsArray.Add(MakeShared<FJsonValueString>(ElemValue));
                     }
-                    Props->SetArrayField(FString::Printf(TEXT("%s (%d)"), *Prop->GetName(), Num), ElementsArray);
+                    // Stable key (no count suffix) so external consumers can index by property name.
+                    TSharedPtr<FJsonObject> ArrayInfo = MakeShared<FJsonObject>();
+                    ArrayInfo->SetNumberField(TEXT("Count"), Num);
+                    ArrayInfo->SetArrayField(TEXT("Elements"), ElementsArray);
+                    Props->SetObjectField(Prop->GetName(), ArrayInfo);
                 }
                 else
                 {
@@ -152,54 +162,3 @@ TSharedPtr<FJsonObject> UDataAssetExportCommandlet::ExportProperties(UObject* Ob
     return Props;
 }
 
-TArray<FString> UDataAssetExportCommandlet::ParseAssetPaths(const FString& Params) const
-{
-    TArray<FString> Result;
-
-    FString AssetsValue;
-    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue, false))
-    {
-        AssetsValue.TrimQuotesInline();
-        AssetsValue.ParseIntoArray(Result, TEXT(","), true);
-
-        for (FString& Path : Result)
-        {
-            Path.TrimStartAndEndInline();
-        }
-    }
-
-    return Result;
-}
-
-FString UDataAssetExportCommandlet::GetExportPath(const FString& AssetPath) const
-{
-    FString RelativePath = AssetPath;
-    RelativePath.RemoveFromStart(TEXT("/"));
-
-    return FPaths::Combine(FPaths::ProjectDir(), TEXT("Intermediate"), TEXT("UAssetExport"), RelativePath + TEXT(".json"));
-}
-
-bool UDataAssetExportCommandlet::SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const
-{
-    FString OutputDir = FPaths::GetPath(FilePath);
-    if (!IFileManager::Get().DirectoryExists(*OutputDir))
-    {
-        IFileManager::Get().MakeDirectory(*OutputDir, true);
-    }
-
-    FString OutputString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
-    if (!FJsonSerializer::Serialize(JsonObject, Writer))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to serialize JSON for: %s"), *FilePath);
-        return false;
-    }
-
-    if (!FFileHelper::SaveStringToFile(OutputString, *FilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to write file: %s"), *FilePath);
-        return false;
-    }
-
-    return true;
-}

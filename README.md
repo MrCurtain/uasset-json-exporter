@@ -25,9 +25,14 @@ The common thread: information is locked inside the editor UI and cannot be cons
 
 ## How it solves it
 
-The plugin runs outside the editor via a UE Commandlet, walks the asset's internal structure, and serializes it to JSON. It never modifies assets, only reads and exports.
+The plugin walks each asset's internal structure and serializes it to JSON, which the AI reads as text. Read-only, never modifies assets.
 
-The exported JSON contains the full structural information: nodes, connections, properties, defaults, timeline markers, etc. AI tools can grep and read the JSON directly to understand blueprint logic, locate issues, or assist refactoring.
+v1.5.0 ships a two-pipeline design. The wrapper checks the heartbeat file `Saved/UAssetExportQueue/.alive` and routes automatically:
+
+- **Editor open**: writes `pending/<uuid>.json`; an in-editor `UEditorSubsystem` consumes it in-process, drops the result in `done/<uuid>.json`, and surfaces a Slate toast in the editor. No need to close the editor.
+- **Editor closed**: launches `UnrealEditor-Cmd.exe` for the commandlet path. After `Main` returns the process often lingers (shader compile workers, DDC commit, module teardown); the wrapper watches output mtime and force-kills via `taskkill` once all files have been stable for N seconds (default 10).
+
+Both paths produce identical output; callers don't care which ran. The exported JSON carries full structural information, nodes, connections, properties, defaults, timeline markers, and AI tools can grep + offset-read on demand.
 
 ## Comparison with UE MCP approaches
 
@@ -36,7 +41,8 @@ The community has another class of solutions: UE MCP (e.g. `kvick-games/UnrealMC
 | Dimension | This plugin (Commandlet) | UE MCP (editor runtime) |
 |---|---|---|
 | Working mode | Offline JSON export, AI reads text | Online RPC, AI drives the editor directly |
-| Editor state | Must be closed (commandlet locks the project) | Must be open |
+| Call paradigm | File-queue RPC (subsystem mode, MCP-aligned in principle) / process spawn (commandlet mode) | Online RPC (HTTP / Python bridge) |
+| Editor state | Adaptive: in-editor subsystem when open, commandlet when closed | Must be open |
 | Asset structure readout | Strong, full EdGraph / Pin / connection serialization | Weak, Remote Control cannot reach EdGraph detail |
 | Runtime state | None | Strong, can read PIE actors, selection, live properties |
 | Token cost | Controllable, grep + offset reads on demand | Uncontrollable, driven by RPC response size |
@@ -76,9 +82,9 @@ bash scripts/run_commandlet.sh \
     "/Game/Path/BP_A,/Game/Path/BP_B"
 ```
 
-After the commandlet's `Main` returns, `UnrealEditor-Cmd.exe` often lingers for tens of seconds or hangs because of shader compile workers, DDC commits, module teardown, etc. The wrapper script watches the mtime of the expected JSON outputs; once all files are written and have been stable for N seconds (default 10), it force-kills the process via `taskkill`.
+The wrapper routes automatically based on the heartbeat (see [How it solves it](#how-it-solves-it) above).
 
-Optional arguments: `[IDLE_SEC] [MAX_SEC]`, default `10` and `600`. Exit code `0` means all expected JSON files exist, `1` means some are missing, `2` means argument error.
+Optional arguments: `[IDLE_SEC] [MAX_SEC]`, default `10` and `600`. Exit code `0` = success, `1` = missing outputs or dispatch failure, `2` = argument error or editor conflict.
 
 ### Native invocation
 
@@ -390,8 +396,8 @@ Copy the contents of `src/` into `<UE_PATH>/Engine/Plugins/Editor/UAssetJsonExpo
 ### Prerequisites
 
 - Unreal Engine 5.7
-- Editor must be closed while running the commandlet (`UnrealEditor-Cmd` locks the project)
 - The project must be compiled with the plugin included
+- Calling via the wrapper does not require closing the editor; calling the native commandlet directly still does, to release the `.uproject` lock
 
 ## Using with Claude Code
 
@@ -419,7 +425,9 @@ Plugin: `Plugins/UAssetJsonExporter` (Editor-only)
 
 ### Usage
 
-UnrealEditor-Cmd.exe Project.uproject -run=<RunName> -assets="/Game/Path/Asset" -nullrhi -nosplash -nosound
+bash Plugins/UAssetJsonExporter/scripts/run_commandlet.sh "<UE_PATH>" "Project.uproject" <RunName> "/Game/Path/Asset"
+
+Wrapper routes automatically by `Saved/UAssetExportQueue/.alive` heartbeat: editor open → in-editor subsystem (Slate toast feedback), editor closed → UnrealEditor-Cmd commandlet. Output format is identical either way.
 
 ### Output
 
@@ -446,7 +454,7 @@ The AI will then invoke the commandlet automatically to export and analyze asset
 
 ## Version
 
-Current version: **v1.4.0**
+Current version: **v1.5.0**
 
 The version is defined in `src/Source/UAssetJsonExporter/Public/UAssetJsonExporterVersion.h`, and is embedded in every exported JSON's `ExporterVersion` field.
 

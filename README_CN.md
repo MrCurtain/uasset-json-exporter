@@ -25,9 +25,14 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 
 ## 它如何解决
 
-插件通过 UE Commandlet 在编辑器外运行，遍历资产的内部结构，序列化为 JSON。不修改任何资产，只读取和导出。
+插件遍历资产内部结构并序列化为 JSON，AI 直接读文本。只读取，不修改资产。
 
-导出的 JSON 包含完整的结构信息：节点、连接、属性、默认值、时间轴标记等。AI 工具可以直接 grep 和读取 JSON 来理解蓝图逻辑，定位问题，或辅助重构。
+v1.5.0 双管线设计，wrapper 通过心跳文件 `Saved/UAssetExportQueue/.alive` 自动路由：
+
+- **编辑器开启**：写入 `pending/<uuid>.json`，由 in-editor `UEditorSubsystem` 同进程消化，结果落 `done/<uuid>.json`，编辑器右下角弹 Slate 通知反馈进度。无需关编辑器。
+- **编辑器关闭**：启动 `UnrealEditor-Cmd.exe` 走 commandlet 路径。`Main` 返回后进程常因 shader compile worker、DDC commit、模块卸载继续停留几十秒，wrapper 监控输出 JSON 的 mtime，所有文件稳定 N 秒（默认 10）后通过 `taskkill` 强制结束。
+
+两条路径输出格式完全一致，调用方无需关心走哪条。导出 JSON 包含节点、连接、属性、默认值、时间轴标记等完整结构信息，AI 工具可以 grep + offset 按需读取。
 
 ## 与 UE MCP 方案的对比
 
@@ -36,7 +41,8 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 | 维度 | 本插件（Commandlet） | UE MCP（Editor 运行时） |
 |---|---|---|
 | 工作模式 | 离线导出 JSON，AI 读文本 | 在线 RPC，AI 直接操作 Editor |
-| 编辑器状态 | 必须关闭（Cmd 锁定项目） | 必须开启 |
+| 调用范式 | 文件队列 RPC（subsystem 模式，理论上契合 MCP）/ 进程启动（commandlet 模式） | 在线 RPC（HTTP / Python bridge） |
+| 编辑器状态 | 自适应：开启走 in-editor subsystem，关闭走 commandlet | 必须开启 |
 | 资产结构读取 | 强，EdGraph/Pin/连接完整序列化 | 弱，Remote Control 拿不到 EdGraph 细节 |
 | 运行时状态 | 无 | 强，可读 PIE 中的 actor、selection、live property |
 | Token 成本 | 可控，grep + offset 按需读取 | 不可控，取决于 RPC 返回体 |
@@ -76,9 +82,9 @@ bash scripts/run_commandlet.sh \
     "/Game/Path/BP_A,/Game/Path/BP_B"
 ```
 
-`UnrealEditor-Cmd.exe` 在 commandlet 的 `Main` 返回后，常会因为 shader compile worker、DDC commit、模块卸载等原因继续停留几十秒甚至挂死。wrapper 脚本监控预期输出 JSON 的 mtime，一旦所有文件都已写出且连续稳定 N 秒（默认 10 秒），立即通过 `taskkill` 强制结束进程。
+Wrapper 按心跳自动路由（详见前文 [它如何解决](#它如何解决)）。
 
-可选参数：`[IDLE_SEC] [MAX_SEC]`，默认 `10` 和 `600`。退出码 `0` 表示所有预期 JSON 文件存在，`1` 表示有缺失，`2` 表示调用参数错误。
+可选参数：`[IDLE_SEC] [MAX_SEC]`，默认 `10` 和 `600`。退出码 `0` 表示成功，`1` 表示输出缺失或 dispatch 失败，`2` 表示调用参数错误或与编辑器冲突。
 
 ### 原生调用
 
@@ -390,8 +396,8 @@ ISM / HISM / Foliage 组件若实例数 > 200，只导出 count + bounds + 前 5
 ### 前置条件
 
 - Unreal Engine 5.7
-- 运行 Commandlet 时编辑器必须关闭（`UnrealEditor-Cmd` 会锁定项目）
 - 项目必须已编译且包含该插件
+- 通过 wrapper 调用时无需关闭编辑器；直接调原生 commandlet 仍需关闭编辑器以释放 `.uproject` 锁
 
 ## 配合 Claude Code 使用
 
@@ -419,7 +425,9 @@ Plugin: `Plugins/UAssetJsonExporter` (Editor-only)
 
 ### Usage
 
-UnrealEditor-Cmd.exe Project.uproject -run=<RunName> -assets="/Game/Path/Asset" -nullrhi -nosplash -nosound
+bash Plugins/UAssetJsonExporter/scripts/run_commandlet.sh "<UE_PATH>" "Project.uproject" <RunName> "/Game/Path/Asset"
+
+Wrapper routes automatically by `Saved/UAssetExportQueue/.alive` heartbeat: editor open → in-editor subsystem (Slate toast feedback), editor closed → UnrealEditor-Cmd commandlet. Output format is identical either way.
 
 ### Output
 
@@ -446,7 +454,7 @@ AI 会在相关任务中自动调用 Commandlet 导出并分析资产内容。
 
 ## 版本
 
-当前版本：**v1.4.0**
+当前版本：**v1.5.0**
 
 版本号定义在 `src/Source/UAssetJsonExporter/Public/UAssetJsonExporterVersion.h`，同时嵌入在每个导出 JSON 的 `ExporterVersion` 字段中。
 

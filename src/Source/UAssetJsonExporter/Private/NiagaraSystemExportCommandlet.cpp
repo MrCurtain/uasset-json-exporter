@@ -1,5 +1,6 @@
 #include "NiagaraSystemExportCommandlet.h"
 #include "UAssetJsonExporterModule.h"
+#include "UAssetJsonExporterUtil.h"
 #include "UAssetJsonExporterVersion.h"
 
 #include "Dom/JsonObject.h"
@@ -8,9 +9,9 @@
 #include "Misc/Paths.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
+#include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
-#include "NiagaraRendererProperties.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 
@@ -24,9 +25,14 @@ UNiagaraSystemExportCommandlet::UNiagaraSystemExportCommandlet()
 
 int32 UNiagaraSystemExportCommandlet::Main(const FString& Params)
 {
+    if (UAssetJsonExporter::AbortIfLiveEditor())
+    {
+        return 2;
+    }
+
     UE_LOG(LogUAssetJsonExporter, Display, TEXT("UAssetJsonExporter v%s - NiagaraSystemExport"), UASSET_JSON_EXPORTER_VERSION_STRING);
 
-    TArray<FString> AssetPaths = ParseAssetPaths(Params);
+    TArray<FString> AssetPaths = UAssetJsonExporter::ParseAssetPaths(Params);
 
     if (AssetPaths.IsEmpty())
     {
@@ -52,8 +58,8 @@ int32 UNiagaraSystemExportCommandlet::Main(const FString& Params)
             continue;
         }
 
-        FString OutputPath = GetExportPath(AssetPath);
-        if (SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
+        FString OutputPath = UAssetJsonExporter::GetExportPath(AssetPath);
+        if (UAssetJsonExporter::SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
         {
             UE_LOG(LogUAssetJsonExporter, Display, TEXT("Exported: %s -> %s"), *AssetPath, *OutputPath);
             ExportedCount++;
@@ -116,8 +122,8 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportEmitter(const FNia
         return Obj;
     }
 
-    // Sim target
-    Obj->SetStringField(TEXT("SimTarget"), EmitterData->SimTarget == ENiagaraSimTarget::CPUSim ? TEXT("CPU") : TEXT("GPU"));
+    const TCHAR* SimTargetName = EmitterData->SimTarget == ENiagaraSimTarget::CPUSim ? TEXT("CPU") : TEXT("GPU");
+    Obj->SetStringField(TEXT("SimTarget"), SimTargetName);
 
     // Scripts per usage stage
     if (EmitterData->SpawnScriptProps.Script)
@@ -215,54 +221,3 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportSubclassProperties
     return Props;
 }
 
-TArray<FString> UNiagaraSystemExportCommandlet::ParseAssetPaths(const FString& Params) const
-{
-    TArray<FString> Result;
-
-    FString AssetsValue;
-    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue, false))
-    {
-        AssetsValue.TrimQuotesInline();
-        AssetsValue.ParseIntoArray(Result, TEXT(","), true);
-
-        for (FString& Path : Result)
-        {
-            Path.TrimStartAndEndInline();
-        }
-    }
-
-    return Result;
-}
-
-FString UNiagaraSystemExportCommandlet::GetExportPath(const FString& AssetPath) const
-{
-    FString RelativePath = AssetPath;
-    RelativePath.RemoveFromStart(TEXT("/"));
-
-    return FPaths::Combine(FPaths::ProjectDir(), TEXT("Intermediate"), TEXT("UAssetExport"), RelativePath + TEXT(".json"));
-}
-
-bool UNiagaraSystemExportCommandlet::SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const
-{
-    FString OutputDir = FPaths::GetPath(FilePath);
-    if (!IFileManager::Get().DirectoryExists(*OutputDir))
-    {
-        IFileManager::Get().MakeDirectory(*OutputDir, true);
-    }
-
-    FString OutputString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
-    if (!FJsonSerializer::Serialize(JsonObject, Writer))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to serialize JSON for: %s"), *FilePath);
-        return false;
-    }
-
-    if (!FFileHelper::SaveStringToFile(OutputString, *FilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to write file: %s"), *FilePath);
-        return false;
-    }
-
-    return true;
-}

@@ -35,7 +35,4 @@ private:
     TSharedPtr<FJsonObject> ExportMaterialInstance(class UMaterialInstance* MaterialInstance) const;
     TSharedPtr<FJsonObject> ExportExpression(UMaterialExpression* Expression) const;
 
-    TArray<FString> ParseAssetPaths(const FString& Params) const;
-    FString GetExportPath(const FString& AssetPath) const;
-    bool SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const;
 };

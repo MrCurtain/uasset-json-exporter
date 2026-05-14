@@ -30,7 +30,4 @@ private:
     TSharedPtr<FJsonObject> ExportDataTable(class UDataTable* DataTable) const;
     TSharedPtr<FJsonObject> ExportRow(const UScriptStruct* RowStruct, const void* RowData) const;
 
-    TArray<FString> ParseAssetPaths(const FString& Params) const;
-    FString GetExportPath(const FString& AssetPath) const;
-    bool SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const;
 };

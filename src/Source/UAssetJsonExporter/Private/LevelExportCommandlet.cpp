@@ -1,5 +1,6 @@
 #include "LevelExportCommandlet.h"
 #include "UAssetJsonExporterModule.h"
+#include "UAssetJsonExporterUtil.h"
 #include "UAssetJsonExporterVersion.h"
 
 #include "Components/InstancedStaticMeshComponent.h"
@@ -18,9 +19,9 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Rendering/ColorVertexBuffer.h"
-#include "StaticMeshComponentLODInfo.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "StaticMeshComponentLODInfo.h"
 #include "UObject/Package.h"
 
 ULevelExportCommandlet::ULevelExportCommandlet()
@@ -33,9 +34,14 @@ ULevelExportCommandlet::ULevelExportCommandlet()
 
 int32 ULevelExportCommandlet::Main(const FString& Params)
 {
+    if (UAssetJsonExporter::AbortIfLiveEditor())
+    {
+        return 2;
+    }
+
     UE_LOG(LogUAssetJsonExporter, Display, TEXT("UAssetJsonExporter v%s - LevelExport"), UASSET_JSON_EXPORTER_VERSION_STRING);
 
-    TArray<FString> AssetPaths = ParseAssetPaths(Params);
+    TArray<FString> AssetPaths = UAssetJsonExporter::ParseAssetPaths(Params);
 
     if (AssetPaths.IsEmpty())
     {
@@ -71,8 +77,8 @@ int32 ULevelExportCommandlet::Main(const FString& Params)
             continue;
         }
 
-        FString OutputPath = GetExportPath(AssetPath);
-        if (SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
+        FString OutputPath = UAssetJsonExporter::GetExportPath(AssetPath);
+        if (UAssetJsonExporter::SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
         {
             UE_LOG(LogUAssetJsonExporter, Display, TEXT("Exported: %s -> %s"), *AssetPath, *OutputPath);
             ExportedCount++;
@@ -124,12 +130,17 @@ TSharedPtr<FJsonObject> ULevelExportCommandlet::ExportLevel(UWorld* World, const
 
     // Actors
     TArray<TSharedPtr<FJsonValue>> ActorsArray;
-    int32 SkippedCount = 0;
     for (AActor* Actor : World->PersistentLevel->Actors)
     {
-        if (!Actor) { SkippedCount++; continue; }
+        if (!Actor)
+        {
+            continue;
+        }
         // Skip ephemeral runtime actors that shouldn't be in a fresh load
-        if (Actor->IsA<AWorldSettings>()) continue;
+        if (Actor->IsA<AWorldSettings>())
+        {
+            continue;
+        }
 
         TSharedPtr<FJsonObject> ActorJson = ExportActor(Actor);
         if (ActorJson.IsValid())
@@ -431,54 +442,3 @@ void ULevelExportCommandlet::AddTransformField(const FTransform& Transform, cons
     OutJson->SetObjectField(FieldName, Json);
 }
 
-TArray<FString> ULevelExportCommandlet::ParseAssetPaths(const FString& Params) const
-{
-    TArray<FString> Result;
-
-    FString AssetsValue;
-    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue, false))
-    {
-        AssetsValue.TrimQuotesInline();
-        AssetsValue.ParseIntoArray(Result, TEXT(","), true);
-
-        for (FString& Path : Result)
-        {
-            Path.TrimStartAndEndInline();
-        }
-    }
-
-    return Result;
-}
-
-FString ULevelExportCommandlet::GetExportPath(const FString& AssetPath) const
-{
-    FString RelativePath = AssetPath;
-    RelativePath.RemoveFromStart(TEXT("/"));
-
-    return FPaths::Combine(FPaths::ProjectDir(), TEXT("Intermediate"), TEXT("UAssetExport"), RelativePath + TEXT(".json"));
-}
-
-bool ULevelExportCommandlet::SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const
-{
-    FString OutputDir = FPaths::GetPath(FilePath);
-    if (!IFileManager::Get().DirectoryExists(*OutputDir))
-    {
-        IFileManager::Get().MakeDirectory(*OutputDir, true);
-    }
-
-    FString OutputString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
-    if (!FJsonSerializer::Serialize(JsonObject, Writer))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to serialize JSON for: %s"), *FilePath);
-        return false;
-    }
-
-    if (!FFileHelper::SaveStringToFile(OutputString, *FilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to write file: %s"), *FilePath);
-        return false;
-    }
-
-    return true;
-}

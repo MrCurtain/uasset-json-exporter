@@ -19,11 +19,15 @@ public class UAssetJsonExporter : ModuleRules
                 "UMG",
                 "UMGEditor",
                 "MovieScene",
+                "Slate",
                 "SlateCore",
                 "Niagara",
                 "NiagaraCore",
                 "AIModule",
-                "AnimGraph"
+                "AnimGraph",
+                "DirectoryWatcher",
+                "Projects",
+                "EditorSubsystem"
             }
         );
     }

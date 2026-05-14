@@ -22,6 +22,7 @@
 #include "UObject/UObjectIterator.h"
 
 #include "UAssetJsonExporterModule.h"
+#include "UAssetJsonExporterUtil.h"
 #include "UAssetJsonExporterVersion.h"
 
 UBlueprintEdGraphExportCommandlet::UBlueprintEdGraphExportCommandlet()
@@ -34,9 +35,14 @@ UBlueprintEdGraphExportCommandlet::UBlueprintEdGraphExportCommandlet()
 
 int32 UBlueprintEdGraphExportCommandlet::Main(const FString& Params)
 {
+    if (UAssetJsonExporter::AbortIfLiveEditor())
+    {
+        return 2;
+    }
+
     UE_LOG(LogUAssetJsonExporter, Display, TEXT("UAssetJsonExporter v%s - BlueprintEdGraphExport"), UASSET_JSON_EXPORTER_VERSION_STRING);
 
-    TArray<FString> AssetPaths = ParseAssetPaths(Params);
+    TArray<FString> AssetPaths = UAssetJsonExporter::ParseAssetPaths(Params);
     FExportOptions Options = ParseExportOptions(Params);
 
     UE_LOG(LogUAssetJsonExporter, Display, TEXT("Options: IncludeGraphs=%s"),
@@ -66,8 +72,8 @@ int32 UBlueprintEdGraphExportCommandlet::Main(const FString& Params)
             continue;
         }
 
-        FString OutputPath = GetExportPath(AssetPath);
-        if (SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
+        FString OutputPath = UAssetJsonExporter::GetExportPath(AssetPath);
+        if (UAssetJsonExporter::SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
         {
             UE_LOG(LogUAssetJsonExporter, Display, TEXT("Exported: %s -> %s"), *AssetPath, *OutputPath);
             ExportedCount++;
@@ -767,61 +773,9 @@ void UBlueprintEdGraphExportCommandlet::ExportResolvedProperties(UObject* Instan
     }
 }
 
-TArray<FString> UBlueprintEdGraphExportCommandlet::ParseAssetPaths(const FString& Params) const
-{
-    TArray<FString> Result;
-
-    FString AssetsValue;
-    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue, false))
-    {
-        AssetsValue.TrimQuotesInline();
-        AssetsValue.ParseIntoArray(Result, TEXT(","), true);
-
-        for (FString& Path : Result)
-        {
-            Path.TrimStartAndEndInline();
-        }
-    }
-
-    return Result;
-}
-
 UBlueprintEdGraphExportCommandlet::FExportOptions UBlueprintEdGraphExportCommandlet::ParseExportOptions(const FString& Params) const
 {
     FExportOptions Options;
     Options.bIncludeGraphs = FParse::Param(*Params, TEXT("graphs"));
     return Options;
-}
-
-FString UBlueprintEdGraphExportCommandlet::GetExportPath(const FString& AssetPath) const
-{
-    FString RelativePath = AssetPath;
-    RelativePath.RemoveFromStart(TEXT("/"));
-
-    return FPaths::Combine(FPaths::ProjectDir(), TEXT("Intermediate"), TEXT("UAssetExport"), RelativePath + TEXT(".json"));
-}
-
-bool UBlueprintEdGraphExportCommandlet::SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const
-{
-    FString OutputDir = FPaths::GetPath(FilePath);
-    if (!IFileManager::Get().DirectoryExists(*OutputDir))
-    {
-        IFileManager::Get().MakeDirectory(*OutputDir, true);
-    }
-
-    FString OutputString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
-    if (!FJsonSerializer::Serialize(JsonObject, Writer))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to serialize JSON for: %s"), *FilePath);
-        return false;
-    }
-
-    if (!FFileHelper::SaveStringToFile(OutputString, *FilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to write file: %s"), *FilePath);
-        return false;
-    }
-
-    return true;
 }

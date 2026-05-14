@@ -1,12 +1,13 @@
 #include "AnimBlueprintExportCommandlet.h"
 #include "UAssetJsonExporterModule.h"
+#include "UAssetJsonExporterUtil.h"
 #include "UAssetJsonExporterVersion.h"
 
 #include "Animation/AnimBlueprint.h"
+#include "AnimationStateMachineGraph.h"
 #include "AnimGraphNode_StateMachineBase.h"
 #include "AnimStateNode.h"
 #include "AnimStateTransitionNode.h"
-#include "AnimationStateMachineGraph.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "EdGraph/EdGraph.h"
@@ -31,9 +32,14 @@ UAnimBlueprintExportCommandlet::UAnimBlueprintExportCommandlet()
 
 int32 UAnimBlueprintExportCommandlet::Main(const FString& Params)
 {
+    if (UAssetJsonExporter::AbortIfLiveEditor())
+    {
+        return 2;
+    }
+
     UE_LOG(LogUAssetJsonExporter, Display, TEXT("UAssetJsonExporter v%s - AnimBlueprintExport"), UASSET_JSON_EXPORTER_VERSION_STRING);
 
-    TArray<FString> AssetPaths = ParseAssetPaths(Params);
+    TArray<FString> AssetPaths = UAssetJsonExporter::ParseAssetPaths(Params);
 
     if (AssetPaths.IsEmpty())
     {
@@ -59,8 +65,8 @@ int32 UAnimBlueprintExportCommandlet::Main(const FString& Params)
             continue;
         }
 
-        FString OutputPath = GetExportPath(AssetPath);
-        if (SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
+        FString OutputPath = UAssetJsonExporter::GetExportPath(AssetPath);
+        if (UAssetJsonExporter::SaveJsonToFile(JsonObject.ToSharedRef(), OutputPath))
         {
             UE_LOG(LogUAssetJsonExporter, Display, TEXT("Exported: %s -> %s"), *AssetPath, *OutputPath);
             ExportedCount++;
@@ -152,6 +158,8 @@ TSharedPtr<FJsonObject> UAnimBlueprintExportCommandlet::ExportAnimBlueprint(UAni
     return Root;
 }
 
+// State machines store States and Transitions as EdGraph nodes; walk them once, recursing
+// into each state's BoundGraph (the actual animation logic) and each transition's rule graph.
 TSharedPtr<FJsonObject> UAnimBlueprintExportCommandlet::ExportStateMachine(UAnimationStateMachineGraph* SMGraph) const
 {
     TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
@@ -375,56 +383,3 @@ TSharedPtr<FJsonObject> UAnimBlueprintExportCommandlet::ExportPin(const UEdGraph
     return PinObj;
 }
 
-// Shared utilities
-
-TArray<FString> UAnimBlueprintExportCommandlet::ParseAssetPaths(const FString& Params) const
-{
-    TArray<FString> Result;
-
-    FString AssetsValue;
-    if (FParse::Value(*Params, TEXT("-assets="), AssetsValue, false))
-    {
-        AssetsValue.TrimQuotesInline();
-        AssetsValue.ParseIntoArray(Result, TEXT(","), true);
-
-        for (FString& Path : Result)
-        {
-            Path.TrimStartAndEndInline();
-        }
-    }
-
-    return Result;
-}
-
-FString UAnimBlueprintExportCommandlet::GetExportPath(const FString& AssetPath) const
-{
-    FString RelativePath = AssetPath;
-    RelativePath.RemoveFromStart(TEXT("/"));
-
-    return FPaths::Combine(FPaths::ProjectDir(), TEXT("Intermediate"), TEXT("UAssetExport"), RelativePath + TEXT(".json"));
-}
-
-bool UAnimBlueprintExportCommandlet::SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const
-{
-    FString OutputDir = FPaths::GetPath(FilePath);
-    if (!IFileManager::Get().DirectoryExists(*OutputDir))
-    {
-        IFileManager::Get().MakeDirectory(*OutputDir, true);
-    }
-
-    FString OutputString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
-    if (!FJsonSerializer::Serialize(JsonObject, Writer))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to serialize JSON for: %s"), *FilePath);
-        return false;
-    }
-
-    if (!FFileHelper::SaveStringToFile(OutputString, *FilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-    {
-        UE_LOG(LogUAssetJsonExporter, Error, TEXT("Failed to write file: %s"), *FilePath);
-        return false;
-    }
-
-    return true;
-}

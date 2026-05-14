@@ -33,7 +33,4 @@ private:
     TSharedPtr<FJsonObject> ExportNotify(const FAnimNotifyEvent& NotifyEvent) const;
     TSharedPtr<FJsonObject> ExportSubclassProperties(UObject* Object, UClass* StopAtClass) const;
 
-    TArray<FString> ParseAssetPaths(const FString& Params) const;
-    FString GetExportPath(const FString& AssetPath) const;
-    bool SaveJsonToFile(const TSharedRef<FJsonObject>& JsonObject, const FString& FilePath) const;
 };
