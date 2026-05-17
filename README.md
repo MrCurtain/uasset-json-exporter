@@ -6,37 +6,49 @@
 ![Unreal Engine 5](https://img.shields.io/badge/Unreal_Engine-5.7-blue?logo=unrealengine&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-Export Unreal Engine binary assets as structured JSON, for AI toolchains and external analysis tools to consume.
+Binary files can't be edited as text and are therefore hard to handle. This plugin exports Unreal Engine 5 assets into a structure an LLM can read, extracting just the context it needs.
 
 ## What problem it solves
 
-A lot of logic and configuration in a UE project is locked inside binary `.uasset` files. When you ask an AI to help debug or refactor, you typically hit these walls:
+The general problem: the information lives inside an app's interface, out of reach of code review, AI analysis, and automation.
 
-- **"I can't open binary files"**, the AI cannot do anything with `.uasset` and kicks the problem back to you
-- **Blueprint is too large to C++-ify**, an EventGraph with hundreds of nodes has no readable text form, hand-translating node by node is slow and error-prone
-- **Dead code and misconfigurations inside blueprints**, abandoned variables, broken connections, wrong defaults left by the original creator are hard to fully audit by eye in the editor
-- **AnimMontage notify timing is hard to trace**, ANS trigger time, duration, parameters are scattered along the timeline and invisible from the code side
-- **Widget layout and animation live only in the editor**, UMG hierarchy, slot settings, keyframe sequences have no textual review surface
-- **VFX and material parameters are scattered across the editor**, Niagara emitter config, material node connections and parameter overrides have no unified textual review
-- **DataTable and DataAsset configuration is not searchable**, scrolling through a several-dozen-row data table in the editor is miserable
-- **Level (.umap) content is entirely binary**, actor layout, static mesh references, collision config, streaming levels, per-instance overrides have no readable text view
+Where this shows up in a UE project today: a lot of logic and configuration is locked inside binary `.uasset` files. When you ask an AI to help debug or refactor, you typically hit these walls:
 
-The common thread: information is locked inside the editor UI and cannot be consumed by code review, AI analysis, or automation pipelines.
+- **"I can't open binary files"**: the AI cannot do anything with `.uasset` and kicks the problem back to you
+- **Blueprint is too large to C++-ify**: an EventGraph with hundreds of nodes has no readable text form, hand-translating node by node is slow and error-prone
+- **Dead code and misconfigurations inside blueprints**: abandoned variables, broken connections, wrong defaults left by the original creator are hard to fully audit by eye in the editor
+- **AnimMontage notify timing is hard to trace**: ANS trigger time, duration, parameters are scattered along the timeline and invisible from the code side
+- **Widget layout and animation live only in the editor**: UMG hierarchy, slot settings, keyframe sequences have no textual review surface
+- **VFX and material parameters are scattered across the editor**: Niagara emitter config, material node connections and parameter overrides have no unified textual review
+- **DataTable and DataAsset configuration is not searchable**: scrolling through a several-dozen-row data table in the editor is miserable
+- **Level (.umap) content is entirely binary**: actor layout, static mesh references, collision config, streaming levels, per-instance overrides have no readable text view
 
-## How it solves it
+## How it works
 
-The plugin walks each asset's internal structure and serializes it to JSON, which the AI reads as text. Read-only, never modifies assets.
+The same design works whether or not the host tool is open, and it keeps the exported text small enough for an AI to read quickly.
+
+The plugin walks each asset's internal structure and serializes it to JSON, which the AI reads as text. It is read-only and never modifies assets.
 
 v1.5.0 ships a two-pipeline design. The wrapper checks the heartbeat file `Saved/UAssetExportQueue/.alive` and routes automatically:
 
 - **Editor open**: writes `pending/<uuid>.json`; an in-editor `UEditorSubsystem` consumes it in-process, drops the result in `done/<uuid>.json`, and surfaces a Slate toast in the editor. No need to close the editor.
 - **Editor closed**: launches `UnrealEditor-Cmd.exe` for the commandlet path. After `Main` returns the process often lingers (shader compile workers, DDC commit, module teardown); the wrapper watches output mtime and force-kills via `taskkill` once all files have been stable for N seconds (default 10).
 
-Both paths produce identical output; callers don't care which ran. The exported JSON carries full structural information, nodes, connections, properties, defaults, timeline markers, and AI tools can grep + offset-read on demand.
+Both paths produce identical output regardless of editor state. The exported JSON carries the full structure: nodes, connections, properties, defaults, and timeline markers. AI tools can grep and offset-read it on demand.
+
+## How it generalizes
+
+UE is the proving ground; the three reusable parts don't depend on it.
+
+| Reusable asset | What it is | Transfers to |
+|---|---|---|
+| Pattern | opaque binary -> AI-consumable structured text bridge | any GUI-locked proprietary format (DCC, CAD/BIM, EDA, simulation) |
+| Architecture | heartbeat-routed adaptive dual pipeline (live in-process vs headless) | any heavyweight host with both live and headless modes (Houdini/Maya/Blender/Revit/MATLAB) |
+| Serialization discipline | token-economy-aware export (delta-from-archetype, cap-and-sample, grep+offset reading contract) | context engineering for any LLM data pipeline |
 
 ## Comparison with UE MCP approaches
 
-The community has another class of solutions: UE MCP (e.g. `kvick-games/UnrealMCP`, `chongdashu/unreal-mcp`), which uses Remote Control / Python bridges to let AI manipulate assets and scenes at editor **runtime**. The two classes solve different problems and are not mutually exclusive.
+The community offers another approach, UE MCP (e.g. `kvick-games/UnrealMCP`, `chongdashu/unreal-mcp`): it uses Remote Control / Python bridges to let AI manipulate assets and scenes at editor **runtime**. The two solve different problems and are not mutually exclusive.
 
 | Dimension | This plugin (Commandlet) | UE MCP (editor runtime) |
 |---|---|---|
@@ -82,7 +94,7 @@ bash scripts/run_commandlet.sh \
     "/Game/Path/BP_A,/Game/Path/BP_B"
 ```
 
-The wrapper routes automatically based on the heartbeat (see [How it solves it](#how-it-solves-it) above).
+The wrapper routes automatically based on the heartbeat (see [How it works](#how-it-works) above).
 
 Optional arguments: `[IDLE_SEC] [MAX_SEC]`, default `10` and `600`. Exit code `0` = success, `1` = missing outputs or dispatch failure, `2` = argument error or editor conflict.
 
@@ -100,7 +112,7 @@ Replace the name after `-run=` with the exporter you need. All exporters share t
 
 If running under Git Bash, prefix with `MSYS_NO_PATHCONV=1` to prevent `/Game/...` from being rewritten as a Windows path.
 
-With native invocation, if the process does not exit on its own, you need to `taskkill` it manually, otherwise the lingering process will keep `.uproject` locked and block subsequent operations.
+With native invocation, if the process does not exit on its own, you must `taskkill` it manually. Otherwise the lingering process keeps `.uproject` locked and blocks subsequent operations.
 
 ### Output
 
@@ -330,7 +342,7 @@ MaterialInstance exports the parameter override table:
 }
 ```
 
-Export strategy: every actor / component only serializes **properties that differ from its archetype (`UObject::GetArchetype()`)**, mirroring the `.umap` own persistence contract for zero loss and maximum compression. Actors spawned from blueprints correctly align to the BPGC CDO, so "BP default" and "instance override" stay distinguishable.
+Export strategy: every actor / component only serializes **properties that differ from its archetype (`UObject::GetArchetype()`)**, mirroring how `.umap` itself persists, for zero loss and maximum compression. Actors spawned from blueprints correctly align to the BPGC CDO, so "BP default" and "instance override" stay distinguishable.
 
 For ISM / HISM / Foliage components with instance count > 200, only count + bounds + the first 5 samples are exported, to prevent a single foliage component from blowing up the file size.
 </details>
@@ -397,7 +409,7 @@ Copy the contents of `src/` into `<UE_PATH>/Engine/Plugins/Editor/UAssetJsonExpo
 
 - Unreal Engine 5.7
 - The project must be compiled with the plugin included
-- Calling via the wrapper does not require closing the editor; calling the native commandlet directly still does, to release the `.uproject` lock
+- Calling via the wrapper does not require closing the editor. Calling the native commandlet directly still requires it, so the editor can release the `.uproject` lock
 
 ## Using with Claude Code
 
@@ -450,7 +462,7 @@ Do NOT read the entire file at once. Instead:
 - Need to audit a Level: actor placements, static mesh / collision setup, streaming level config, per-instance overrides
 ```
 
-The AI will then invoke the commandlet automatically to export and analyze assets during relevant tasks.
+Once this block is added, the AI invokes the commandlet automatically during relevant tasks to export and analyze the assets.
 
 ## Version
 

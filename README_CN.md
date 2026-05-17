@@ -6,11 +6,13 @@
 ![Unreal Engine 5](https://img.shields.io/badge/Unreal_Engine-5.7-blue?logo=unrealengine&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-将 Unreal Engine 的二进制资产导出为结构化 JSON，供 AI 工具链和外部分析工具消费。
+二进制文件没法当文本编辑，处理起来很麻烦。这个插件把 Unreal Engine 5 的资产导出成 LLM 能读懂的结构，只抽取它需要的那部分上下文。
 
 ## 它解决什么问题
 
-UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让 AI 协助调试或重构时，通常会遇到：
+通用问题：信息锁在 GUI 工具里，代码审查、AI 分析和自动化都够不到。
+
+具体到当下的 UE 项目：大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让 AI 协助调试或重构时，通常会遇到：
 
 - **"我无法打开二进制文件"**，AI 对 `.uasset` 束手无策，只能把问题丢回给你
 - **蓝图过大，难以 C++ 化**，数百个节点的 EventGraph 没有可读的文本表示，人工逐节点翻译既慢又容易遗漏
@@ -21,9 +23,9 @@ UE 项目中大量逻辑和配置锁在二进制 `.uasset` 文件里。当你让
 - **DataTable 和 DataAsset 的配置数据不可搜索**，几十行的数据表在编辑器里逐行翻看效率极低
 - **关卡（.umap）内容完全是二进制**，Actor 布局、StaticMesh 引用、碰撞配置、Streaming Level、per-instance 覆盖等没有可读的文本视图
 
-这些场景的共性：信息被锁在编辑器 UI 中，无法被代码审查、AI 分析、或自动化管道消费。
+## 它如何工作
 
-## 它如何解决
+同一套设计，编辑器开着或关着都能用，并且把导出文本压得足够小，让 AI 很快读完。
 
 插件遍历资产内部结构并序列化为 JSON，AI 直接读文本。只读取，不修改资产。
 
@@ -34,9 +36,19 @@ v1.5.0 双管线设计，wrapper 通过心跳文件 `Saved/UAssetExportQueue/.al
 
 两条路径输出格式完全一致，调用方无需关心走哪条。导出 JSON 包含节点、连接、属性、默认值、时间轴标记等完整结构信息，AI 工具可以 grep + offset 按需读取。
 
+## 可迁移性
+
+UE 只是首个落地场景，下面三项可复用资产并不依赖它。
+
+| 可复用资产 | 是什么 | 迁移到 |
+|---|---|---|
+| 模式 | 不透明二进制 -> AI 可消费结构化文本的桥接 | 任何被 GUI 锁定的私有格式（DCC、CAD/BIM、EDA、仿真） |
+| 架构 | 心跳路由的自适应双管线（存活同进程 vs 无头） | 任何同时具备存活与无头模式的重量级宿主（Houdini/Maya/Blender/Revit/MATLAB） |
+| 序列化纪律 | token 经济意识的导出（delta-from-archetype、cap-and-sample、grep+offset 读取契约） | 任何 LLM 数据管线的上下文工程 |
+
 ## 与 UE MCP 方案的对比
 
-社区中存在另一类方案：UE MCP（如 `kvick-games/UnrealMCP`、`chongdashu/unreal-mcp`），通过 Remote Control / Python 桥接，让 AI 在 Editor **运行时** 操作资产和场景。两类方案解决不同问题，并非互斥。
+社区中存在另一类方案：UE MCP（如 `kvick-games/UnrealMCP`、`chongdashu/unreal-mcp`），通过 Remote Control / Python 打通，让 AI 在 Editor **运行时** 操作资产和场景。两类方案解决不同问题，并非互斥。
 
 | 维度 | 本插件（Commandlet） | UE MCP（Editor 运行时） |
 |---|---|---|
@@ -82,7 +94,7 @@ bash scripts/run_commandlet.sh \
     "/Game/Path/BP_A,/Game/Path/BP_B"
 ```
 
-Wrapper 按心跳自动路由（详见前文 [它如何解决](#它如何解决)）。
+Wrapper 按心跳自动路由（详见前文 [它如何工作](#它如何工作)）。
 
 可选参数：`[IDLE_SEC] [MAX_SEC]`，默认 `10` 和 `600`。退出码 `0` 表示成功，`1` 表示输出缺失或 dispatch 失败，`2` 表示调用参数错误或与编辑器冲突。
 
