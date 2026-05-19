@@ -36,6 +36,29 @@ namespace
         const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Raw);
         return FJsonSerializer::Deserialize(Reader, OutObject) && OutObject.IsValid();
     }
+
+    // Asset paths reduced to bare names for toast text. Caps at 3 to keep the
+    // notification one line; remainder collapses to "+N more".
+    FString FormatAssetNames(const TArray<FString>& Assets)
+    {
+        const int32 MaxShown = 3;
+
+        TArray<FString> Names;
+        Names.Reserve(Assets.Num());
+        for (const FString& AssetPath : Assets)
+        {
+            Names.Add(FPaths::GetBaseFilename(AssetPath));
+        }
+
+        if (Names.Num() <= MaxShown)
+        {
+            return FString::Join(Names, TEXT(", "));
+        }
+
+        const TArray<FString> Head(Names.GetData(), MaxShown);
+        return FString::Printf(TEXT("%s +%d more"),
+            *FString::Join(Head, TEXT(", ")), Names.Num() - MaxShown);
+    }
 }
 
 FString UAssetExportQueueSubsystem::GetQueueRoot()
@@ -218,7 +241,7 @@ void UAssetExportQueueSubsystem::ProcessTaskFile(const FString& PendingPath)
         return;
     }
 
-    TSharedPtr<SNotificationItem> Toast = ShowStartToast(RunName, Assets.Num());
+    TSharedPtr<SNotificationItem> Toast = ShowStartToast(RunName, Assets);
 
     const FString AssetsCsv = FString::Join(Assets, TEXT(","));
     const bool bDispatched = DispatchRun(RunName, AssetsCsv, ExtraArgs);
@@ -251,14 +274,15 @@ void UAssetExportQueueSubsystem::ProcessTaskFile(const FString& PendingPath)
     WriteDoneFile(DonePath, ExitCode, Outputs, ErrorMessage);
     IFileManager::Get().Delete(*ProcessingPath);
 
+    const FString AssetNames = FormatAssetNames(Assets);
     FString Summary;
     if (bSuccess)
     {
-        Summary = FString::Printf(TEXT("Exported %d / %d (%s)"), PresentCount, Assets.Num(), *RunName);
+        Summary = FString::Printf(TEXT("Exported %d/%d (%s): %s"), PresentCount, Assets.Num(), *RunName, *AssetNames);
     }
     else
     {
-        Summary = FString::Printf(TEXT("Export incomplete %d / %d (%s)"), PresentCount, Assets.Num(), *RunName);
+        Summary = FString::Printf(TEXT("Export incomplete %d/%d (%s): %s"), PresentCount, Assets.Num(), *RunName, *AssetNames);
     }
     FinishToast(Toast, bSuccess, Summary);
 }
@@ -327,10 +351,10 @@ void UAssetExportQueueSubsystem::WriteDoneFile(const FString& DoneFilePath, int3
     FFileHelper::SaveStringToFile(Serialized, *DoneFilePath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 }
 
-TSharedPtr<SNotificationItem> UAssetExportQueueSubsystem::ShowStartToast(const FString& RunName, int32 AssetCount) const
+TSharedPtr<SNotificationItem> UAssetExportQueueSubsystem::ShowStartToast(const FString& RunName, const TArray<FString>& Assets) const
 {
-    const TCHAR* Plural = AssetCount == 1 ? TEXT("") : TEXT("s");
-    const FString Message = FString::Printf(TEXT("Exporting %d asset%s (%s)..."), AssetCount, Plural, *RunName);
+    const FString Names = FormatAssetNames(Assets);
+    const FString Message = FString::Printf(TEXT("Exporting %d (%s): %s..."), Assets.Num(), *RunName, *Names);
 
     FNotificationInfo Info(FText::FromString(Message));
     Info.bFireAndForget = false;

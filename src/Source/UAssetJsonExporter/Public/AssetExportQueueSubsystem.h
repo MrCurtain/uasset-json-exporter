@@ -38,7 +38,7 @@ private:
     static UClass* FindCommandletClass(const FString& RunName);
     static void WriteDoneFile(const FString& DoneFilePath, int32 ExitCode, const TArray<FString>& Outputs, const FString& ErrorMessage);
 
-    TSharedPtr<SNotificationItem> ShowStartToast(const FString& RunName, int32 AssetCount) const;
+    TSharedPtr<SNotificationItem> ShowStartToast(const FString& RunName, const TArray<FString>& Assets) const;
     static void FinishToast(TSharedPtr<SNotificationItem> Item, bool bSuccess, const FString& Summary);
 
     FTSTicker::FDelegateHandle m_HeartbeatHandle;

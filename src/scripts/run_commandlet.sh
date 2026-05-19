@@ -143,10 +143,14 @@ route_commandlet() {
         rm -f "$OUT"
     done
 
+    local CMD_LOG="$QUEUE_ROOT/last_commandlet.log"
+    mkdir -p "$QUEUE_ROOT"
+    : > "$CMD_LOG"
+
     MSYS_NO_PATHCONV=1 "$UE_CMD" "$UPROJECT" \
         -run="$RUN" -assets="$ASSETS" $EXTRA_ARGS \
-        -nullrhi -nosplash -nosound -unattended \
-        >/dev/null 2>&1 &
+        -nullrhi -nosplash -nosound -unattended -stdout \
+        >"$CMD_LOG" 2>&1 &
     local PID=$!
     echo "[run_commandlet] launched PID=$PID run=$RUN idle=${IDLE_SEC}s max=${MAX_SEC}s" >&2
 
@@ -207,6 +211,11 @@ route_commandlet() {
             RC=1
         fi
     done
+    if [ "$RC" -ne 0 ]; then
+        echo "[run_commandlet] commandlet diagnostics (tail of $CMD_LOG):" >&2
+        tail -n 40 "$CMD_LOG" >&2 2>/dev/null
+        echo "[run_commandlet] full UE log dir: $PROJECT_DIR/Saved/Logs/" >&2
+    fi
     return "$RC"
 }
 
