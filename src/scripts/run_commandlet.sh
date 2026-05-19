@@ -73,6 +73,42 @@ is_heartbeat_fresh() {
     return 1
 }
 
+# $1 = Windows pid. 0 if a live Windows process with that pid exists.
+is_winpid_alive() {
+    local wp="$1"
+    [ -z "$wp" ] && return 1
+    tasklist //FI "PID eq $wp" //NH 2>/dev/null | grep -qw "$wp"
+}
+
+# Kill a backgrounded native UnrealEditor-Cmd job. $! is an MSYS pid; Windows
+# taskkill needs the Windows pid from /proc/<msys_pid>/winpid. Tree-kill (//T)
+# also reaps ShaderCompileWorker / CrashReportClient children, then verify the
+# Windows process is actually gone. Returns 0 only if confirmed dead.
+terminate_commandlet() {
+    local msys_pid="$1" win_pid="$2"
+
+    if [ -z "$win_pid" ] && [ -r "/proc/$msys_pid/winpid" ]; then
+        win_pid="$(cat "/proc/$msys_pid/winpid" 2>/dev/null)"
+    fi
+
+    if [ -n "$win_pid" ]; then
+        taskkill //F //T //PID "$win_pid" >/dev/null 2>&1
+    fi
+    kill -9 "$msys_pid" 2>/dev/null
+
+    local tries=0
+    while [ -n "$win_pid" ] && is_winpid_alive "$win_pid"; do
+        tries=$((tries + 1))
+        if [ "$tries" -gt 5 ]; then
+            echo "[run_commandlet] WARN WINPID=$win_pid still alive after taskkill" >&2
+            return 1
+        fi
+        taskkill //F //T //PID "$win_pid" >/dev/null 2>&1
+        sleep 1
+    done
+    return 0
+}
+
 route_queue() {
     mkdir -p "$PENDING_DIR" "$DONE_DIR"
 
@@ -152,7 +188,11 @@ route_commandlet() {
         -nullrhi -nosplash -nosound -unattended -stdout \
         >"$CMD_LOG" 2>&1 &
     local PID=$!
-    echo "[run_commandlet] launched PID=$PID run=$RUN idle=${IDLE_SEC}s max=${MAX_SEC}s" >&2
+    local WINPID=""
+    if [ -r "/proc/$PID/winpid" ]; then
+        WINPID="$(cat "/proc/$PID/winpid" 2>/dev/null)"
+    fi
+    echo "[run_commandlet] launched PID=$PID WINPID=${WINPID:-?} run=$RUN idle=${IDLE_SEC}s max=${MAX_SEC}s" >&2
 
     local START_TS=$(date +%s)
     local STABLE_SINCE=0
@@ -197,9 +237,10 @@ route_commandlet() {
     done
 
     if kill -0 "$PID" 2>/dev/null; then
-        echo "[run_commandlet] killing PID=$PID reason=$KILL_REASON" >&2
-        taskkill //F //PID "$PID" //T >/dev/null 2>&1
-        wait "$PID" 2>/dev/null
+        echo "[run_commandlet] killing PID=$PID WINPID=${WINPID:-?} reason=$KILL_REASON" >&2
+        if terminate_commandlet "$PID" "$WINPID"; then
+            wait "$PID" 2>/dev/null
+        fi
     else
         echo "[run_commandlet] PID=$PID exited on its own" >&2
     fi
