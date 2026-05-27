@@ -114,6 +114,16 @@ Wrapper 按心跳自动路由（详见前文 [它如何工作](#它如何工作)
 
 使用原生调用时，若发现进程未自行退出，需要自行通过 `taskkill` 清理，否则会锁住 `.uproject` 文件影响后续操作。
 
+### 故障处理
+
+若 wrapper 的心跳路径无响应，且 fallback commandlet 进程在 wrapper `taskkill` 后仍然杀不掉，几乎可以确定是 Visual Studio 持有该进程。不要犹豫，直接强杀：
+
+```bash
+taskkill /F /IM UnrealEditor-Cmd.exe
+```
+
+必要时连同相关 Visual Studio 进程一起杀。卡死的 `UnrealEditor-Cmd.exe` 会持续锁住 `.uproject`，影响后续所有调用。
+
 ### 输出
 
 文件输出到 `<ProjectDir>/Intermediate/UAssetExport/<AssetPath>.json`，不会进入版本控制。

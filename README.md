@@ -114,6 +114,16 @@ If running under Git Bash, prefix with `MSYS_NO_PATHCONV=1` to prevent `/Game/..
 
 With native invocation, if the process does not exit on its own, you must `taskkill` it manually. Otherwise the lingering process keeps `.uproject` locked and blocks subsequent operations.
 
+### Troubleshooting
+
+If the wrapper's heartbeat path hangs and the fallback commandlet process won't die after the wrapper's `taskkill`, Visual Studio is almost certainly holding the process. Don't tiptoe around it — kill it directly:
+
+```bash
+taskkill /F /IM UnrealEditor-Cmd.exe
+```
+
+Kill the offending Visual Studio process too if needed. A stuck `UnrealEditor-Cmd.exe` keeps `.uproject` locked and blocks every subsequent run.
+
 ### Output
 
 Files are written to `<ProjectDir>/Intermediate/UAssetExport/<AssetPath>.json`, which stays out of version control.
