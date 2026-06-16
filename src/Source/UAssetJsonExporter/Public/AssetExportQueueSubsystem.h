@@ -14,6 +14,7 @@ class UAssetExportQueueSubsystem : public UEditorSubsystem
     GENERATED_BODY()
 
 public:
+    virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
 

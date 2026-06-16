@@ -1,0 +1,2 @@
+# Force LF line endings for all text files; binaries auto-detected and left alone.
+* text=auto eol=lf

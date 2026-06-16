@@ -93,6 +93,17 @@ FString UAssetExportQueueSubsystem::GetExportOutputRoot()
         FPaths::Combine(FPaths::ProjectDir(), TEXT("Intermediate"), TEXT("UAssetExport")));
 }
 
+bool UAssetExportQueueSubsystem::ShouldCreateSubsystem(UObject* Outer) const
+{
+    // Live-editor side of the export handshake only. Inside a commandlet this subsystem's own
+    // heartbeat would trip the commandlet's live-editor guard and deadlock the standalone path.
+    if (IsRunningCommandlet())
+    {
+        return false;
+    }
+    return Super::ShouldCreateSubsystem(Outer);
+}
+
 void UAssetExportQueueSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);

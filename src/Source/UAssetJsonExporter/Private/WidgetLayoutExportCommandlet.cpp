@@ -19,14 +19,72 @@
 #include "K2Node_Event.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Channels/MovieSceneChannelEditorData.h"
 #include "Channels/MovieSceneChannelProxy.h"
 #include "Channels/MovieSceneDoubleChannel.h"
+#include "Channels/MovieSceneFloatChannel.h"
+#include "Curves/RealCurve.h"
 #include "MovieScene.h"
 #include "MovieSceneSection.h"
 #include "MovieSceneTrack.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "WidgetBlueprint.h"
+
+namespace
+{
+    FString InterpModeToString(ERichCurveInterpMode Mode)
+    {
+        switch (Mode)
+        {
+            case RCIM_Linear:   return TEXT("Linear");
+            case RCIM_Constant: return TEXT("Constant");
+            case RCIM_Cubic:    return TEXT("Cubic");
+            default:            return TEXT("None");
+        }
+    }
+
+    // Emit each channel tagged with its proxy meta name (e.g. "Angle") plus per-key time/value/interp.
+    // Widget animations store float channels; other assets may use double, so this is templated over both.
+    template <typename ChannelType, typename ValueType>
+    void ExportNamedChannels(const FMovieSceneChannelProxy& Proxy, FFrameRate TickResolution, TArray<TSharedPtr<FJsonValue>>& OutChannels)
+    {
+        TArrayView<ChannelType*> Channels = Proxy.GetChannels<ChannelType>();
+        TArrayView<const FMovieSceneChannelMetaData> MetaData = Proxy.GetMetaData<ChannelType>();
+
+        for (int32 ChannelIndex = 0; ChannelIndex < Channels.Num(); ChannelIndex++)
+        {
+            ChannelType* Channel = Channels[ChannelIndex];
+            if (!Channel)
+            {
+                continue;
+            }
+
+            TSharedPtr<FJsonObject> ChannelObj = MakeShared<FJsonObject>();
+            if (MetaData.IsValidIndex(ChannelIndex))
+            {
+                ChannelObj->SetStringField(TEXT("Name"), MetaData[ChannelIndex].Name.ToString());
+            }
+
+            TMovieSceneChannelData<ValueType> ChannelData = Channel->GetData();
+            TArrayView<const FFrameNumber> Times = ChannelData.GetTimes();
+            TArrayView<const ValueType> Values = ChannelData.GetValues();
+
+            TArray<TSharedPtr<FJsonValue>> KeysArray;
+            for (int32 KeyIndex = 0; KeyIndex < Times.Num(); KeyIndex++)
+            {
+                TSharedPtr<FJsonObject> KeyObj = MakeShared<FJsonObject>();
+                KeyObj->SetNumberField(TEXT("Time"), TickResolution.AsSeconds(Times[KeyIndex]));
+                KeyObj->SetNumberField(TEXT("Value"), Values[KeyIndex].Value);
+                KeyObj->SetStringField(TEXT("Interp"), InterpModeToString(Values[KeyIndex].InterpMode));
+                KeysArray.Add(MakeShared<FJsonValueObject>(KeyObj));
+            }
+            ChannelObj->SetArrayField(TEXT("Keys"), KeysArray);
+
+            OutChannels.Add(MakeShared<FJsonValueObject>(ChannelObj));
+        }
+    }
+}
 
 UWidgetLayoutExportCommandlet::UWidgetLayoutExportCommandlet()
 {
@@ -335,34 +393,9 @@ TSharedPtr<FJsonObject> UWidgetLayoutExportCommandlet::ExportAnimation(UWidgetAn
 
                 FMovieSceneChannelProxy& Proxy = Section->GetChannelProxy();
 
-                // Double channels (opacity, transform components, etc.)
-                for (FMovieSceneDoubleChannel* Channel : Proxy.GetChannels<FMovieSceneDoubleChannel>())
-                {
-                    if (!Channel)
-                    {
-                        continue;
-                    }
-
-                    TSharedPtr<FJsonObject> ChannelObj = MakeShared<FJsonObject>();
-                    ChannelObj->SetStringField(TEXT("Type"), TEXT("Double"));
-
-
-                    TMovieSceneChannelData<FMovieSceneDoubleValue> ChannelData = Channel->GetData();
-                    TArrayView<const FFrameNumber> Times = ChannelData.GetTimes();
-                    TArrayView<const FMovieSceneDoubleValue> Values = ChannelData.GetValues();
-
-                    TArray<TSharedPtr<FJsonValue>> KeysArray;
-                    for (int32 i = 0; i < Times.Num(); i++)
-                    {
-                        TSharedPtr<FJsonObject> KeyObj = MakeShared<FJsonObject>();
-                        KeyObj->SetNumberField(TEXT("Time"), TickResolution.AsSeconds(Times[i]));
-                        KeyObj->SetNumberField(TEXT("Value"), Values[i].Value);
-                        KeysArray.Add(MakeShared<FJsonValueObject>(KeyObj));
-                    }
-                    ChannelObj->SetArrayField(TEXT("Keys"), KeysArray);
-
-                    ChannelsArray.Add(MakeShared<FJsonValueObject>(ChannelObj));
-                }
+                // Widget animations store float channels (transform, render opacity); other assets may use double.
+                ExportNamedChannels<FMovieSceneFloatChannel, FMovieSceneFloatValue>(Proxy, TickResolution, ChannelsArray);
+                ExportNamedChannels<FMovieSceneDoubleChannel, FMovieSceneDoubleValue>(Proxy, TickResolution, ChannelsArray);
 
                 if (ChannelsArray.Num() > 0)
                 {
