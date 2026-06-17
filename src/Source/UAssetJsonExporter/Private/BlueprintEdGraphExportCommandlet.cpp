@@ -100,6 +100,25 @@ TSharedPtr<FJsonObject> UBlueprintEdGraphExportCommandlet::ExportBlueprint(UBlue
         Root->SetStringField(TEXT("ParentClass"), Blueprint->ParentClass->GetName());
     }
 
+    // Implemented interfaces (BP "Implements Interface" list). Answers "who implements interface X"
+    // directly, without -graphs node scraping for the overriding event titles.
+    TArray<TSharedPtr<FJsonValue>> InterfacesArray;
+    for (const FBPInterfaceDescription& InterfaceDesc : Blueprint->ImplementedInterfaces)
+    {
+        UClass* InterfaceClass = InterfaceDesc.Interface.Get();
+        if (!InterfaceClass)
+        {
+            continue;
+        }
+
+        TSharedPtr<FJsonObject> IfaceObj = MakeShared<FJsonObject>();
+        IfaceObj->SetStringField(TEXT("Name"), InterfaceClass->GetName());
+        IfaceObj->SetStringField(TEXT("Path"), InterfaceClass->GetPathName());
+        InterfacesArray.Add(MakeShared<FJsonValueObject>(IfaceObj));
+    }
+    Root->SetArrayField(TEXT("ImplementedInterfaces"), InterfacesArray);
+    Root->SetNumberField(TEXT("ImplementedInterfaceCount"), InterfacesArray.Num());
+
     // Build a set of SCS component variable names so we can mark auto-generated variables.
     // Each SCS component registers a property of the same name as the variable on the generated class.
     TSet<FString> SCSComponentNames;

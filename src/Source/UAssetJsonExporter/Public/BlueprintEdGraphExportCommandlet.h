@@ -13,6 +13,7 @@ class UEdGraphPin;
  * Exports Blueprint structure + CDO state to JSON for external tooling consumption.
  *
  * Top-level fields (always emitted unless empty):
+ *   ImplementedInterfaces[] / ImplementedInterfaceCount - BP "Implements Interface" list (Name, Path) (since 1.7.0)
  *   Variables / VariableCount / UserVariableCount       - generated class member properties
  *   Components[] (Name, Class, IsRoot, ParentName,      - SCS components with both:
  *       IsEditorOnly, PropertyOverrides, ResolvedProperties)
