@@ -6,9 +6,14 @@
 #include "NiagaraSystemExportCommandlet.generated.h"
 
 class UNiagaraSystem;
+class UNiagaraDataInterface;
+class UNiagaraMeshRendererProperties;
+struct FNiagaraParameterStore;
+struct FNiagaraTypeDefinition;
+struct FVersionedNiagaraEmitterData;
 
 /*
- * Exports Niagara System structure (emitters, module stacks, parameters, renderers) to JSON.
+ * Exports Niagara System structure (emitters, module input values, lifecycle, renderers, curves) to JSON.
  *
  * Usage:
  *   UnrealEditor-Cmd.exe Project.uproject -run=NiagaraSystemExport -assets="/Game/Path/NS_A,/Game/Path/NS_B"
@@ -34,5 +39,13 @@ private:
     TSharedPtr<FJsonObject> ExportScript(class UNiagaraScript* Script, const FString& Usage) const;
     TSharedPtr<FJsonObject> ExportRendererProperties(class UNiagaraRendererProperties* Renderer) const;
     TSharedPtr<FJsonObject> ExportSubclassProperties(UObject* Object, UClass* StopAtClass) const;
+
+    // Module input values: decode the script's RapidIterationParameters (Lifetime, Scale, SpawnCount, loop settings)
+    TSharedPtr<FJsonObject> ExportParameterStoreValues(const FNiagaraParameterStore& Store) const;
+    FString DecodeNiagaraValue(const FNiagaraTypeDefinition& Type, const uint8* Data) const;
+
+    // Module stack + curve data interfaces from the emitter source graph
+    TSharedPtr<FJsonObject> ExportEmitterGraph(FVersionedNiagaraEmitterData* EmitterData) const;
+    TSharedPtr<FJsonObject> ExportCurveDataInterface(const FString& InputName, UNiagaraDataInterface* DataInterface) const;
 
 };

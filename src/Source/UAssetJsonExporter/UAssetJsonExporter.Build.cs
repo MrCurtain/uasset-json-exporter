@@ -23,6 +23,7 @@ public class UAssetJsonExporter : ModuleRules
                 "SlateCore",
                 "Niagara",
                 "NiagaraCore",
+                "NiagaraEditor",
                 "AIModule",
                 "AnimGraph",
                 "DirectoryWatcher",

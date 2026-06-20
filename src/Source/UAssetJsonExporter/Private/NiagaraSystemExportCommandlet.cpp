@@ -3,17 +3,31 @@
 #include "UAssetJsonExporterUtil.h"
 #include "UAssetJsonExporterVersion.h"
 
+#include "Curves/RichCurve.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Engine/StaticMesh.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
-#include "NiagaraEmitter.h"
-#include "NiagaraEmitterHandle.h"
-#include "NiagaraRendererProperties.h"
-#include "NiagaraScript.h"
-#include "NiagaraSystem.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+
+#include "NiagaraDataInterfaceColorCurve.h"
+#include "NiagaraDataInterfaceCurve.h"
+#include "NiagaraDataInterfaceVector2DCurve.h"
+#include "NiagaraDataInterfaceVectorCurve.h"
+#include "NiagaraEmitter.h"
+#include "NiagaraEmitterHandle.h"
+#include "NiagaraGraph.h"
+#include "NiagaraMeshRendererProperties.h"
+#include "NiagaraNodeFunctionCall.h"
+#include "NiagaraNodeInput.h"
+#include "NiagaraParameterStore.h"
+#include "NiagaraRendererProperties.h"
+#include "NiagaraScript.h"
+#include "NiagaraScriptSource.h"
+#include "NiagaraSystem.h"
+#include "NiagaraTypes.h"
 
 UNiagaraSystemExportCommandlet::UNiagaraSystemExportCommandlet()
 {
@@ -80,18 +94,9 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportNiagaraSystem(UNia
     Root->SetStringField(TEXT("AssetPath"), System->GetPathName());
     Root->SetStringField(TEXT("ExportTimestamp"), FDateTime::Now().ToString());
 
-    // System-level exposed user parameters
-    TArray<TSharedPtr<FJsonValue>> UserParamsArray;
-    const FNiagaraUserRedirectionParameterStore& UserParams = System->GetExposedParameters();
-
-    for (const FNiagaraVariableWithOffset& VarWithOffset : UserParams.ReadParameterVariables())
-    {
-        TSharedPtr<FJsonObject> ParamObj = MakeShared<FJsonObject>();
-        ParamObj->SetStringField(TEXT("Name"), VarWithOffset.GetName().ToString());
-        ParamObj->SetStringField(TEXT("Type"), VarWithOffset.GetType().GetName());
-        UserParamsArray.Add(MakeShared<FJsonValueObject>(ParamObj));
-    }
-    Root->SetArrayField(TEXT("ExposedParameters"), UserParamsArray);
+    // System-level exposed user parameters with their values
+    TSharedPtr<FJsonObject> ExposedParams = ExportParameterStoreValues(System->GetExposedParameters());
+    Root->SetObjectField(TEXT("ExposedParameters"), ExposedParams.ToSharedRef());
 
     // Emitters
     TArray<TSharedPtr<FJsonValue>> EmittersArray;
@@ -124,8 +129,15 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportEmitter(const FNia
 
     const TCHAR* SimTargetName = EmitterData->SimTarget == ENiagaraSimTarget::CPUSim ? TEXT("CPU") : TEXT("GPU");
     Obj->SetStringField(TEXT("SimTarget"), SimTargetName);
+    Obj->SetBoolField(TEXT("LocalSpace"), EmitterData->bLocalSpace);
 
-    // Scripts per usage stage
+    // Emitter lifecycle stage; loop duration / loop behavior live in this script's inputs
+    if (EmitterData->EmitterUpdateScriptProps.Script)
+    {
+        Obj->SetObjectField(TEXT("EmitterUpdateScript"), ExportScript(EmitterData->EmitterUpdateScriptProps.Script, TEXT("EmitterUpdate")));
+    }
+
+    // Particle stages; Lifetime / initial Scale live in these inputs
     if (EmitterData->SpawnScriptProps.Script)
     {
         Obj->SetObjectField(TEXT("SpawnScript"), ExportScript(EmitterData->SpawnScriptProps.Script, TEXT("Spawn")));
@@ -133,6 +145,13 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportEmitter(const FNia
     if (EmitterData->UpdateScriptProps.Script)
     {
         Obj->SetObjectField(TEXT("UpdateScript"), ExportScript(EmitterData->UpdateScriptProps.Script, TEXT("Update")));
+    }
+
+    // Module stack + curves; one source graph per emitter
+    TSharedPtr<FJsonObject> GraphObj = ExportEmitterGraph(EmitterData);
+    if (GraphObj.IsValid() && GraphObj->Values.Num() > 0)
+    {
+        Obj->SetObjectField(TEXT("Graph"), GraphObj);
     }
 
     // Renderers
@@ -160,22 +179,234 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportScript(UNiagaraScr
     Obj->SetStringField(TEXT("Usage"), Usage);
     Obj->SetStringField(TEXT("ScriptName"), Script->GetName());
 
-    // Script parameters (inputs)
-    TArray<TSharedPtr<FJsonValue>> ParamsArray;
-    const FNiagaraVMExecutableData& VMData = Script->GetVMExecutableData();
-    if (VMData.IsValid())
+    // Decoded module input constants the artist typed (Lifetime, Scale, SpawnCount, loop settings...)
+    TSharedPtr<FJsonObject> Inputs = ExportParameterStoreValues(Script->RapidIterationParameters);
+    if (Inputs.IsValid() && Inputs->Values.Num() > 0)
     {
-        for (const FNiagaraVariable& Param : VMData.Parameters.Parameters)
-        {
-            TSharedPtr<FJsonObject> ParamObj = MakeShared<FJsonObject>();
-            ParamObj->SetStringField(TEXT("Name"), Param.GetName().ToString());
-            ParamObj->SetStringField(TEXT("Type"), Param.GetType().GetName());
-            ParamsArray.Add(MakeShared<FJsonValueObject>(ParamObj));
-        }
+        Obj->SetObjectField(TEXT("Inputs"), Inputs);
     }
-    Obj->SetArrayField(TEXT("Parameters"), ParamsArray);
 
     return Obj;
+}
+
+TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportParameterStoreValues(const FNiagaraParameterStore& Store) const
+{
+    TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+
+    const TArray<uint8>& DataArray = Store.GetParameterDataArray();
+
+    for (const FNiagaraVariableWithOffset& Var : Store.ReadParameterVariables())
+    {
+        // POD scalars only; data interfaces / UObjects index a separate store and carry no scalar value
+        if (Var.GetType().IsDataInterface() || Var.GetType().IsUObject())
+        {
+            continue;
+        }
+        if (Var.Offset < 0 || Var.Offset >= DataArray.Num())
+        {
+            continue;
+        }
+
+        const FString Value = DecodeNiagaraValue(Var.GetType(), DataArray.GetData() + Var.Offset);
+        if (!Value.IsEmpty())
+        {
+            Obj->SetStringField(Var.GetName().ToString(), Value);
+        }
+    }
+
+    return Obj;
+}
+
+FString UNiagaraSystemExportCommandlet::DecodeNiagaraValue(const FNiagaraTypeDefinition& Type, const uint8* Data) const
+{
+    if (!Data)
+    {
+        return FString();
+    }
+
+    auto ReadFloat = [Data](int32 Index)
+    {
+        float Value;
+        FMemory::Memcpy(&Value, Data + Index * sizeof(float), sizeof(float));
+        return Value;
+    };
+
+    if (Type == FNiagaraTypeDefinition::GetFloatDef())
+    {
+        return FString::SanitizeFloat(ReadFloat(0));
+    }
+    if (Type == FNiagaraTypeDefinition::GetIntDef())
+    {
+        int32 Value;
+        FMemory::Memcpy(&Value, Data, sizeof(int32));
+        return FString::FromInt(Value);
+    }
+    if (Type == FNiagaraTypeDefinition::GetBoolDef())
+    {
+        int32 Value;
+        FMemory::Memcpy(&Value, Data, sizeof(int32));
+        return Value != 0 ? TEXT("true") : TEXT("false");
+    }
+    // Enums (Loop Behavior, Life Cycle Mode...) are stored as int32
+    if (const UEnum* Enum = Type.GetEnum())
+    {
+        int32 Value;
+        FMemory::Memcpy(&Value, Data, sizeof(int32));
+        return Enum->GetNameStringByValue(Value);
+    }
+    if (Type == FNiagaraTypeDefinition::GetVec2Def())
+    {
+        return FString::Printf(TEXT("(X=%f,Y=%f)"), ReadFloat(0), ReadFloat(1));
+    }
+    if (Type == FNiagaraTypeDefinition::GetVec3Def() || Type == FNiagaraTypeDefinition::GetPositionDef())
+    {
+        return FString::Printf(TEXT("(X=%f,Y=%f,Z=%f)"), ReadFloat(0), ReadFloat(1), ReadFloat(2));
+    }
+    if (Type == FNiagaraTypeDefinition::GetVec4Def() || Type == FNiagaraTypeDefinition::GetColorDef() || Type == FNiagaraTypeDefinition::GetQuatDef())
+    {
+        return FString::Printf(TEXT("(X=%f,Y=%f,Z=%f,W=%f)"), ReadFloat(0), ReadFloat(1), ReadFloat(2), ReadFloat(3));
+    }
+
+    // Fallback: treat unknown POD struct as a raw float array, tagged with the type name
+    const int32 Size = Type.GetSize();
+    if (Size >= 4 && (Size % 4) == 0)
+    {
+        TArray<FString> Floats;
+        for (int32 Index = 0; Index < Size / 4; ++Index)
+        {
+            Floats.Add(FString::SanitizeFloat(ReadFloat(Index)));
+        }
+        return FString::Printf(TEXT("[%s] %s"), *Type.GetName(), *FString::Join(Floats, TEXT(",")));
+    }
+
+    return FString::Printf(TEXT("[%s] <%d bytes>"), *Type.GetName(), Size);
+}
+
+TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportEmitterGraph(FVersionedNiagaraEmitterData* EmitterData) const
+{
+    TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+
+    UNiagaraScript* SourceScript = EmitterData->SpawnScriptProps.Script;
+    if (!SourceScript)
+    {
+        return Obj;
+    }
+
+    UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(SourceScript->GetLatestSource());
+    if (!Source || !Source->NodeGraph)
+    {
+        return Obj;
+    }
+
+    UNiagaraGraph* Graph = Source->NodeGraph;
+
+    // Module / dynamic-input function calls present in the graph
+    TArray<UNiagaraNodeFunctionCall*> FunctionNodes;
+    Graph->GetNodesOfClass<UNiagaraNodeFunctionCall>(FunctionNodes);
+
+    TArray<TSharedPtr<FJsonValue>> ModulesArray;
+    for (UNiagaraNodeFunctionCall* Node : FunctionNodes)
+    {
+        if (!Node)
+        {
+            continue;
+        }
+        const FString ModuleName = Node->FunctionScript ? Node->FunctionScript->GetName() : Node->GetName();
+        ModulesArray.Add(MakeShared<FJsonValueString>(ModuleName));
+    }
+    if (ModulesArray.Num() > 0)
+    {
+        Obj->SetArrayField(TEXT("Modules"), ModulesArray);
+    }
+
+    // Curve data interfaces drive fade / shrink over life
+    TArray<UNiagaraNodeInput*> InputNodes;
+    Graph->GetNodesOfClass<UNiagaraNodeInput>(InputNodes);
+
+    // GetDataInterface() is not exported from NiagaraEditor; read the UPROPERTY via reflection
+    FObjectPropertyBase* DataInterfaceProp = CastField<FObjectPropertyBase>(UNiagaraNodeInput::StaticClass()->FindPropertyByName(TEXT("DataInterface")));
+
+    TArray<TSharedPtr<FJsonValue>> CurvesArray;
+    for (UNiagaraNodeInput* InputNode : InputNodes)
+    {
+        if (!InputNode || !DataInterfaceProp)
+        {
+            continue;
+        }
+        UNiagaraDataInterface* DataInterface = Cast<UNiagaraDataInterface>(DataInterfaceProp->GetObjectPropertyValue_InContainer(InputNode));
+        if (!DataInterface)
+        {
+            continue;
+        }
+        TSharedPtr<FJsonObject> CurveObj = ExportCurveDataInterface(InputNode->Input.GetName().ToString(), DataInterface);
+        if (CurveObj.IsValid())
+        {
+            CurvesArray.Add(MakeShared<FJsonValueObject>(CurveObj));
+        }
+    }
+    if (CurvesArray.Num() > 0)
+    {
+        Obj->SetArrayField(TEXT("Curves"), CurvesArray);
+    }
+
+    return Obj;
+}
+
+TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportCurveDataInterface(const FString& InputName, UNiagaraDataInterface* DataInterface) const
+{
+    auto KeysToJson = [](const FRichCurve& Curve)
+    {
+        TArray<TSharedPtr<FJsonValue>> Keys;
+        for (const FRichCurveKey& Key : Curve.GetConstRefOfKeys())
+        {
+            TSharedPtr<FJsonObject> KeyObj = MakeShared<FJsonObject>();
+            KeyObj->SetNumberField(TEXT("Time"), Key.Time);
+            KeyObj->SetNumberField(TEXT("Value"), Key.Value);
+            Keys.Add(MakeShared<FJsonValueObject>(KeyObj));
+        }
+        return Keys;
+    };
+
+    if (UNiagaraDataInterfaceCurve* FloatCurve = Cast<UNiagaraDataInterfaceCurve>(DataInterface))
+    {
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("Input"), InputName);
+        Obj->SetStringField(TEXT("CurveType"), TEXT("Float"));
+        Obj->SetArrayField(TEXT("Keys"), KeysToJson(FloatCurve->Curve));
+        return Obj;
+    }
+    if (UNiagaraDataInterfaceVector2DCurve* Vec2Curve = Cast<UNiagaraDataInterfaceVector2DCurve>(DataInterface))
+    {
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("Input"), InputName);
+        Obj->SetStringField(TEXT("CurveType"), TEXT("Vector2D"));
+        Obj->SetArrayField(TEXT("X"), KeysToJson(Vec2Curve->XCurve));
+        Obj->SetArrayField(TEXT("Y"), KeysToJson(Vec2Curve->YCurve));
+        return Obj;
+    }
+    if (UNiagaraDataInterfaceVectorCurve* VecCurve = Cast<UNiagaraDataInterfaceVectorCurve>(DataInterface))
+    {
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("Input"), InputName);
+        Obj->SetStringField(TEXT("CurveType"), TEXT("Vector"));
+        Obj->SetArrayField(TEXT("X"), KeysToJson(VecCurve->XCurve));
+        Obj->SetArrayField(TEXT("Y"), KeysToJson(VecCurve->YCurve));
+        Obj->SetArrayField(TEXT("Z"), KeysToJson(VecCurve->ZCurve));
+        return Obj;
+    }
+    if (UNiagaraDataInterfaceColorCurve* ColorCurve = Cast<UNiagaraDataInterfaceColorCurve>(DataInterface))
+    {
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("Input"), InputName);
+        Obj->SetStringField(TEXT("CurveType"), TEXT("Color"));
+        Obj->SetArrayField(TEXT("R"), KeysToJson(ColorCurve->RedCurve));
+        Obj->SetArrayField(TEXT("G"), KeysToJson(ColorCurve->GreenCurve));
+        Obj->SetArrayField(TEXT("B"), KeysToJson(ColorCurve->BlueCurve));
+        Obj->SetArrayField(TEXT("A"), KeysToJson(ColorCurve->AlphaCurve));
+        return Obj;
+    }
+
+    return nullptr;
 }
 
 TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportRendererProperties(UNiagaraRendererProperties* Renderer) const
@@ -190,12 +421,38 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportRendererProperties
         Obj->SetObjectField(TEXT("Properties"), Props);
     }
 
+    // Resolve mesh references to native size so "mesh too big" is measurable
+    if (UNiagaraMeshRendererProperties* MeshRenderer = Cast<UNiagaraMeshRendererProperties>(Renderer))
+    {
+        TArray<TSharedPtr<FJsonValue>> MeshArray;
+        for (const FNiagaraMeshRendererMeshProperties& MeshProps : MeshRenderer->Meshes)
+        {
+            TSharedPtr<FJsonObject> MeshObj = MakeShared<FJsonObject>();
+            if (MeshProps.Mesh)
+            {
+                const FBoxSphereBounds Bounds = MeshProps.Mesh->GetBounds();
+                MeshObj->SetStringField(TEXT("Mesh"), MeshProps.Mesh->GetPathName());
+                MeshObj->SetStringField(TEXT("NativeBoundsExtent"), Bounds.BoxExtent.ToString());
+                MeshObj->SetNumberField(TEXT("NativeBoundsRadius"), Bounds.SphereRadius);
+            }
+            MeshObj->SetStringField(TEXT("Scale"), MeshProps.Scale.ToString());
+            MeshObj->SetStringField(TEXT("PivotOffset"), MeshProps.PivotOffset.ToString());
+            MeshArray.Add(MakeShared<FJsonValueObject>(MeshObj));
+        }
+        if (MeshArray.Num() > 0)
+        {
+            Obj->SetArrayField(TEXT("MeshDetails"), MeshArray);
+        }
+    }
+
     return Obj;
 }
 
 TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportSubclassProperties(UObject* Object, UClass* StopAtClass) const
 {
     TSharedPtr<FJsonObject> Props = MakeShared<FJsonObject>();
+
+    UObject* DefaultObject = Object->GetClass()->GetDefaultObject();
 
     UClass* CurrentClass = Object->GetClass();
     while (CurrentClass && CurrentClass != StopAtClass)
@@ -204,6 +461,11 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportSubclassProperties
         {
             FProperty* Prop = *PropIt;
             if (Prop->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated))
+            {
+                continue;
+            }
+            // Drop values equal to the class default; kills the default binding boilerplate noise
+            if (DefaultObject && Prop->Identical_InContainer(Object, DefaultObject))
             {
                 continue;
             }
@@ -220,4 +482,3 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportSubclassProperties
 
     return Props;
 }
-
