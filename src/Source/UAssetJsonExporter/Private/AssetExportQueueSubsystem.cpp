@@ -108,7 +108,7 @@ void UAssetExportQueueSubsystem::Initialize(FSubsystemCollectionBase& Collection
 {
     Super::Initialize(Collection);
 
-    EnsureQueueDirectories();
+    InitializeQueueDirectories();
     TouchHeartbeat();
 
     m_HeartbeatHandle = FTSTicker::GetCoreTicker().AddTicker(
@@ -156,7 +156,7 @@ void UAssetExportQueueSubsystem::Deinitialize()
     Super::Deinitialize();
 }
 
-void UAssetExportQueueSubsystem::EnsureQueueDirectories() const
+void UAssetExportQueueSubsystem::InitializeQueueDirectories() const
 {
     IFileManager& FileManager = IFileManager::Get();
     FileManager.MakeDirectory(*GetQueueRoot(), true);

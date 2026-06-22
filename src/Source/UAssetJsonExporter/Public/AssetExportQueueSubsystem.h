@@ -26,7 +26,7 @@ public:
     static FString GetExportOutputRoot();
 
 private:
-    void EnsureQueueDirectories() const;
+    void InitializeQueueDirectories() const;
     void TouchHeartbeat() const;
     bool HeartbeatTick(float DeltaTime);
 
