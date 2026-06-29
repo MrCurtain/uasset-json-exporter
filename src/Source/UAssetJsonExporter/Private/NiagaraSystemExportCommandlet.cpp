@@ -6,6 +6,7 @@
 #include "Curves/RichCurve.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "EdGraph/EdGraphPin.h"
 #include "Engine/StaticMesh.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -311,8 +312,16 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportEmitterGraph(FVers
         {
             continue;
         }
-        const FString ModuleName = Node->FunctionScript ? Node->FunctionScript->GetName() : Node->GetName();
-        ModulesArray.Add(MakeShared<FJsonValueString>(ModuleName));
+        TSharedPtr<FJsonObject> ModuleObj = MakeShared<FJsonObject>();
+        ModuleObj->SetStringField(TEXT("Name"), Node->FunctionScript ? Node->FunctionScript->GetName() : Node->GetName());
+
+        TSharedPtr<FJsonObject> Switches = ExportNodeStaticSwitches(Node);
+        if (Switches.IsValid() && Switches->Values.Num() > 0)
+        {
+            ModuleObj->SetObjectField(TEXT("StaticSwitches"), Switches);
+        }
+
+        ModulesArray.Add(MakeShared<FJsonValueObject>(ModuleObj));
     }
     if (ModulesArray.Num() > 0)
     {
@@ -347,6 +356,63 @@ TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportEmitterGraph(FVers
     if (CurvesArray.Num() > 0)
     {
         Obj->SetArrayField(TEXT("Curves"), CurvesArray);
+    }
+
+    return Obj;
+}
+
+TSharedPtr<FJsonObject> UNiagaraSystemExportCommandlet::ExportNodeStaticSwitches(UNiagaraNodeFunctionCall* Node) const
+{
+    TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+
+    UNiagaraGraph* CalledGraph = Node ? Node->GetCalledGraph() : nullptr;
+    if (!CalledGraph)
+    {
+        return Obj;
+    }
+
+    // Static switch value lives as the call node's input pin default, keyed by the switch variable name.
+    for (const FNiagaraVariable& SwitchVar : CalledGraph->FindStaticSwitchInputs())
+    {
+        for (const UEdGraphPin* Pin : Node->Pins)
+        {
+            if (!Pin || Pin->Direction != EGPD_Input || Pin->GetFName() != SwitchVar.GetName())
+            {
+                continue;
+            }
+
+            FString Value = Pin->DefaultValue;
+            // Enum switches (Shape Primitive, etc.) resolve to the artist-facing display name. User-defined
+            // enums store the enumerator's internal name (e.g. "NewEnumerator2"), native enums an integer.
+            if (const UEnum* Enum = SwitchVar.GetType().GetEnum())
+            {
+                int32 Index = INDEX_NONE;
+                if (Value.IsNumeric())
+                {
+                    Index = Enum->GetIndexByValue(FCString::Atoi64(*Value));
+                }
+                else
+                {
+                    for (int32 EnumIndex = 0; EnumIndex < Enum->NumEnums(); ++EnumIndex)
+                    {
+                        if (Enum->GetNameStringByIndex(EnumIndex) == Value)
+                        {
+                            Index = EnumIndex;
+                            break;
+                        }
+                    }
+                }
+                if (Index != INDEX_NONE)
+                {
+                    Value = Enum->GetDisplayNameTextByIndex(Index).ToString();
+                }
+            }
+            if (!Value.IsEmpty())
+            {
+                Obj->SetStringField(SwitchVar.GetName().ToString(), Value);
+            }
+            break;
+        }
     }
 
     return Obj;

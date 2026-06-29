@@ -8,6 +8,7 @@
 class UNiagaraSystem;
 class UNiagaraDataInterface;
 class UNiagaraMeshRendererProperties;
+class UNiagaraNodeFunctionCall;
 struct FNiagaraParameterStore;
 struct FNiagaraTypeDefinition;
 struct FVersionedNiagaraEmitterData;
@@ -47,5 +48,9 @@ private:
     // Module stack + curve data interfaces from the emitter source graph
     TSharedPtr<FJsonObject> ExportEmitterGraph(FVersionedNiagaraEmitterData* EmitterData) const;
     TSharedPtr<FJsonObject> ExportCurveDataInterface(const FString& InputName, UNiagaraDataInterface* DataInterface) const;
+
+    // Static switch selections on a module call (e.g. ShapeLocation "Shape Primitive"); these are pin
+    // defaults on the call node, not RapidIterationParameters, so ExportParameterStoreValues misses them.
+    TSharedPtr<FJsonObject> ExportNodeStaticSwitches(UNiagaraNodeFunctionCall* Node) const;
 
 };
