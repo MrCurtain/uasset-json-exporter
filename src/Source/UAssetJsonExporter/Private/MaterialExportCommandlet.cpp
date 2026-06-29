@@ -11,12 +11,30 @@
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionTextureSampleParameter.h"
+#include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialInstance.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+
+namespace
+{
+    // Custom-node output type is a plain enum (not UENUM), so map it by hand.
+    FString CustomOutputTypeToString(ECustomMaterialOutputType Type)
+    {
+        switch (Type)
+        {
+        case CMOT_Float1:             return TEXT("Float1");
+        case CMOT_Float2:             return TEXT("Float2");
+        case CMOT_Float3:             return TEXT("Float3");
+        case CMOT_Float4:             return TEXT("Float4");
+        case CMOT_MaterialAttributes: return TEXT("MaterialAttributes");
+        default:                      return TEXT("Unknown");
+        }
+    }
+}
 
 UMaterialExportCommandlet::UMaterialExportCommandlet()
 {
@@ -257,6 +275,48 @@ TSharedPtr<FJsonObject> UMaterialExportCommandlet::ExportExpression(UMaterialExp
             Obj->SetStringField(TEXT("DefaultTexture"), TextureParam->Texture->GetPathName());
         }
         Obj->SetStringField(TEXT("Group"), TextureParam->Group.ToString());
+    }
+    else if (UMaterialExpressionCustom* CustomExpr = Cast<UMaterialExpressionCustom>(Expression))
+    {
+        // The HLSL body; the whole reason this branch exists. Node-graph export alone hides it.
+        Obj->SetStringField(TEXT("Code"), CustomExpr->Code);
+        Obj->SetStringField(TEXT("OutputType"), CustomOutputTypeToString(CustomExpr->OutputType));
+
+        if (CustomExpr->AdditionalDefines.Num() > 0)
+        {
+            TArray<TSharedPtr<FJsonValue>> DefinesArray;
+            for (const FCustomDefine& Define : CustomExpr->AdditionalDefines)
+            {
+                TSharedPtr<FJsonObject> DefineObj = MakeShared<FJsonObject>();
+                DefineObj->SetStringField(TEXT("Name"), Define.DefineName);
+                DefineObj->SetStringField(TEXT("Value"), Define.DefineValue);
+                DefinesArray.Add(MakeShared<FJsonValueObject>(DefineObj));
+            }
+            Obj->SetArrayField(TEXT("AdditionalDefines"), DefinesArray);
+        }
+
+        if (CustomExpr->IncludeFilePaths.Num() > 0)
+        {
+            TArray<TSharedPtr<FJsonValue>> IncludesArray;
+            for (const FString& IncludePath : CustomExpr->IncludeFilePaths)
+            {
+                IncludesArray.Add(MakeShared<FJsonValueString>(IncludePath));
+            }
+            Obj->SetArrayField(TEXT("IncludeFilePaths"), IncludesArray);
+        }
+
+        if (CustomExpr->AdditionalOutputs.Num() > 0)
+        {
+            TArray<TSharedPtr<FJsonValue>> OutputsArray;
+            for (const FCustomOutput& Output : CustomExpr->AdditionalOutputs)
+            {
+                TSharedPtr<FJsonObject> OutputObj = MakeShared<FJsonObject>();
+                OutputObj->SetStringField(TEXT("Name"), Output.OutputName.ToString());
+                OutputObj->SetStringField(TEXT("OutputType"), CustomOutputTypeToString(Output.OutputType));
+                OutputsArray.Add(MakeShared<FJsonValueObject>(OutputObj));
+            }
+            Obj->SetArrayField(TEXT("AdditionalOutputs"), OutputsArray);
+        }
     }
 
     // Input connections
